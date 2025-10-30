@@ -43,7 +43,7 @@ target_include_directories(test_dmheap_module
         ${CMAKE_SOURCE_DIR}/include
 )
 
-# Temporarily disabled due to hanging issue - needs investigation  
+# Temporarily disabled due to hanging issue - needs investigation
 # add_test(NAME module_tests COMMAND test_dmheap_module)
 
 # =====================================================================

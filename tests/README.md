@@ -99,11 +99,13 @@ make coverage
 
 ## Bug Fixes
 
-During test development, the following bug was discovered and fixed:
+During test development, the following bug was discovered and fixed in this PR:
 
 **Bug**: `dmheap_init()` did not reset `module_list` to NULL when reinitializing the heap. This caused memory corruption when tests reused the heap buffer with `reset_heap()`.
 
 **Fix**: Added `g_dmheap_context.module_list = NULL;` in `dmheap_init()` (line 447 of src/dmheap.c).
+
+This fix is included in the changes and is essential for test suite operation.
 
 ## Known Issues
 
@@ -125,7 +127,7 @@ Target coverage (with all tests working):
 
 Tests include performance benchmarking that measures:
 - `malloc/free` operations
-- `aligned_alloc` operations  
+- `aligned_alloc` operations
 - `realloc` operations
 
 Benchmark results are saved to `build/benchmark_results.json` in JSON format for tracking performance over time.
