@@ -423,14 +423,6 @@ static module_t* get_or_create_module( const char* module_name )
     return module;
 }
 
-/**
- * @brief Initialize the heap with a given buffer and size.
- * 
- * @param buffer Pointer to the memory buffer to be used as heap.
- * @param size   Size of the memory buffer.
- * 
- * @return true if initialization is successful, false otherwise.
- */
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _init, ( void* buffer, size_t size, size_t alignment ) )
 {
     if(buffer == NULL || size == 0)
@@ -449,23 +441,11 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _init, ( void* buffer, size_t si
     return true;
 }
 
-/**
- * @brief Check if the heap is initialized.
- * 
- * @return true if initialized, false otherwise.
- */
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _is_initialized, ( void ) )
 {
     return g_dmheap_context.heap_start != NULL;
 }
 
-/**
- * @brief Register a module with the heap.
- * 
- * @param module_name Name of the module to register.
- * 
- * @return true if registration is successful, false otherwise.
- */
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _register_module, ( const char* module_name ) )
 {
     Dmod_EnterCritical();
@@ -487,11 +467,6 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _register_module, ( const char* 
     return true;
 }
 
-/**
- * @brief Unregister a module from the heap.
- * 
- * @param module_name Name of the module to unregister.
- */
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _unregister_module, ( const char* module_name ) )
 {
     // it is very likely, that module_name is inside a buffer we will free, so we need to copy it first
@@ -512,28 +487,11 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _unregister_module, ( const char
     DMOD_LOG_INFO("dmheap: Module %s unregistered successfully.\n", module_name_copy);
 }
 
-/**
- * @brief Allocate memory from the heap.
- * 
- * @param size        Size of memory to allocate.
- * @param module_name Name of the module requesting allocation (for logging).
- * 
- * @return Pointer to the allocated memory, or NULL if allocation fails.
- */
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _malloc, ( size_t size, const char* module_name ) )
 {
     return dmheap_aligned_alloc( g_dmheap_context.alignment, size, module_name );
 }
 
-/**
- * @brief Reallocate memory from the heap.
- * 
- * @param ptr         Pointer to the previously allocated memory.
- * @param size        New size of memory to allocate.
- * @param module_name Name of the module requesting reallocation (for logging).
- * 
- * @return Pointer to the reallocated memory, or NULL if reallocation fails.
- */
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _realloc, ( void* ptr, size_t size, const char* module_name) )
 {
     if( ptr == NULL )
@@ -579,12 +537,6 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _realloc, ( void* ptr, size_t si
     return new_ptr;
 }
 
-/**
- * @brief Free memory back to the heap.
- * 
- * @param ptr         Pointer to the memory to free.
- * @param concatenate If true, attempt to merge adjacent free blocks to avoid fragmentation.
- */
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _free, ( void* ptr, bool concatenate ) )
 {
     if( ptr == NULL )
@@ -682,9 +634,6 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignme
     return aligned_address;
 }
 
-/**
- * @brief Concatenate all adjacent free blocks in the heap.
- */
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _concatenate_free_blocks, ( void ) )
 {
     Dmod_EnterCritical();
