@@ -16,6 +16,7 @@
 build/*
 build_*/
 build-*/
+_codeql_build_dir/*
 out/*
 and_whatever_fcking_copilot_creates_for_builds/*
 
