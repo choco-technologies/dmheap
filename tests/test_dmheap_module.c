@@ -16,10 +16,10 @@ static char test_heap[TEST_HEAP_SIZE];
     do { \
         if (condition) { \
             tests_passed++; \
-            printf("[PASS] %s\n", message); \
+            printf("[\033[32;1mPASS\033[0m] %s\n", message); \
         } else { \
             tests_failed++; \
-            printf("[FAIL] %s (line %d)\n", message, __LINE__); \
+            printf("[\033[31;1mFAIL\033[0m] %s (line %d)\n", message, __LINE__); \
         } \
     } while(0)
 
