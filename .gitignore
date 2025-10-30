@@ -12,6 +12,13 @@
 *.map
 *.exp
 
+# Build directories
+build/*
+build_*/
+build-*/
+out/*
+and_whatever_fcking_copilot_creates_for_builds/*
+
 # Precompiled Headers
 *.gch
 *.pch
