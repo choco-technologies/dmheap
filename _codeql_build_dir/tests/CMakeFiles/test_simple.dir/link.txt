@@ -1,0 +1,1 @@
+/home/runner/work/dmheap/.codeql-scratch/dbs/cpp/working/autobuild/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/test_simple.dir/link.d CMakeFiles/test_simple.dir/test_simple.c.o -o test_simple  ../libdmheap.a ../_deps/dmod-build/src/system/libdmod_system.a ../_deps/dmod-build/src/common/libdmod_common.a ../_deps/dmod-build/lib/third-party/FastLZ/libdmod_fastlz.a

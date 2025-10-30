@@ -1,0 +1,2 @@
+/usr/bin/ar qc libdmheap.a CMakeFiles/dmheap.dir/src/dmheap.c.o
+/usr/bin/ranlib libdmheap.a
