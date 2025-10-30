@@ -63,7 +63,9 @@ target_include_directories(test_simple
         ${CMAKE_SOURCE_DIR}/include
 )
 
-add_test(NAME simple_test COMMAND test_simple)
+add_test(NAME dmheap_unit   COMMAND test_dmheap_unit)
+add_test(NAME dmheap_module COMMAND test_dmheap_module)
+add_test(NAME simple_test   COMMAND test_simple)
 
 # =====================================================================
 #               Coverage Support (optional)
