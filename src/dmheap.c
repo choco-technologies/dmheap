@@ -444,6 +444,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _init, ( void* buffer, size_t si
     g_dmheap_context.free_list  = create_block( buffer, size );
     g_dmheap_context.used_list  = NULL;
     g_dmheap_context.alignment  = alignment;
+    g_dmheap_context.module_list = NULL;  // Reset module list on initialization
     Dmod_ExitCritical();
     DMOD_LOG_INFO("dmheap: Initialized with buffer %p of size %zu.\n", buffer, size);
     return true;

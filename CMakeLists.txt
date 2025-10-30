@@ -51,3 +51,13 @@ target_link_libraries(${MODULE_NAME}
     )
 
 create_library_makefile(${MODULE_NAME})
+
+# ======================================================================
+#               Tests
+# ======================================================================
+option(BUILD_TESTS "Build tests" ON)
+
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
