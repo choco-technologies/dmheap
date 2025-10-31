@@ -679,3 +679,30 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _concatenate_free_blocks, ( void
     }
     Dmod_ExitCritical();
 }
+
+#ifndef DMHEAP_DONT_IMPLEMENT_DMOD_API
+DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void*, _MallocEx, ( size_t Size, const char* ModuleName ))
+{
+    return dmheap_aligned_alloc( g_dmheap_context.alignment, Size, ModuleName );
+}
+
+DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void*, _ReallocEx, ( void* Ptr, size_t Size, const char* ModuleName ))
+{
+    return dmheap_realloc( Ptr, Size, ModuleName );
+}
+
+DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void*, _AlignedMallocEx, ( size_t Size, size_t Alignment, const char* ModuleName ))
+{
+    return dmheap_aligned_alloc( Alignment, Size, ModuleName );
+}
+
+DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void , _FreeEx, ( void* Ptr, bool Concatenate ))
+{
+    dmheap_free( Ptr, Concatenate );
+}
+
+DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void, _FreeModule, ( const char* ModuleName ))
+{
+    dmheap_unregister_module( ModuleName );
+}
+#endif // DMHEAP_DONT_IMPLEMENT_DMOD_API

@@ -21,7 +21,7 @@ DMOD_INC_DIRS = include\
 		build/_deps/dmod-build
 DMOD_LIBS = dmod_inc
 DMOD_GEN_HEADERS_IN = 
-DMOD_DEFINITIONS = 
+DMOD_DEFINITIONS = $<$<BOOL:OFF>:DMHEAP_DONT_IMPLEMENT_DMOD_API>
 
 # -----------------------------------------------------------------------------
 # 	Initialization of paths
