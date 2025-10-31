@@ -20,8 +20,8 @@ jobs:
     
     - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential lcov
+        apt-get update
+        apt-get install -y lcov
     
     - name: Configure CMake
       run: |
@@ -68,8 +68,8 @@ jobs:
     
     - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential lcov
+        apt-get update
+        apt-get install -y lcov
     
     - name: Configure CMake with coverage
       run: |
