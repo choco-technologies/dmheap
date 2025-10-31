@@ -1,27 +1,15 @@
 #include "dmheap.h"
-#include <stdio.h>
+#include "test_common.h"
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
 
 // Test counters
-static int tests_passed = 0;
-static int tests_failed = 0;
+int tests_passed = 0;
+int tests_failed = 0;
 
 #define TEST_HEAP_SIZE (2 * 1024 * 1024)  // 2MB for module tests
 static char test_heap[TEST_HEAP_SIZE];
-
-// Macro for test assertions
-#define ASSERT_TEST(condition, message) \
-    do { \
-        if (condition) { \
-            tests_passed++; \
-            printf("[\033[32;1mPASS\033[0m] %s\n", message); \
-        } else { \
-            tests_failed++; \
-            printf("[\033[31;1mFAIL\033[0m] %s (line %d)\n", message, __LINE__); \
-        } \
-    } while(0)
 
 // Helper function to reset heap
 static void reset_heap(void) {

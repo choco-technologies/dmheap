@@ -1,28 +1,16 @@
 #include "dmheap.h"
-#include <stdio.h>
+#include "test_common.h"
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
 #include <assert.h>
 
 // Test counters
-static int tests_passed = 0;
-static int tests_failed = 0;
+int tests_passed = 0;
+int tests_failed = 0;
 
 #define TEST_HEAP_SIZE (1024 * 1024)  // 1MB for tests
 static char test_heap[TEST_HEAP_SIZE];
-
-// Macro for test assertions
-#define ASSERT_TEST(condition, message) \
-    do { \
-        if (condition) { \
-            tests_passed++; \
-            printf("[PASS] %s\n", message); \
-        } else { \
-            tests_failed++; \
-            printf("[FAIL] %s\n", message); \
-        } \
-    } while(0)
 
 // Helper function to reset heap for each test
 static void reset_heap(void) {
@@ -218,7 +206,7 @@ static void test_stress_allocations(void) {
     printf("\n=== Testing Stress Allocations ===\n");
     reset_heap();
     
-    #define NUM_ALLOCS 20  // Reduced from 100
+    #define NUM_ALLOCS 3000  // Increased from 20 for stress testing
     void* ptrs[NUM_ALLOCS];
     int successful_allocs = 0;
     
@@ -232,7 +220,7 @@ static void test_stress_allocations(void) {
         }
     }
     
-    printf("[INFO] Successfully allocated %d/%d blocks\n", successful_allocs, NUM_ALLOCS);
+    TEST_INFO("Successfully allocated %d/%d blocks", successful_allocs, NUM_ALLOCS);
     ASSERT_TEST(successful_allocs > 0, "Allocated at least some blocks in stress test");
     
     // Free all allocations
