@@ -2,13 +2,15 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop, copilot/* ]
+    branches: [ main, develop, copilot/*, feature/* ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, develop, feature/* ]
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    container:
+      image: chocotechnologies/dmod:1.0.2
     
     steps:
     - name: Checkout code
@@ -18,8 +20,8 @@ jobs:
     
     - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential lcov
+        apt-get update
+        apt-get install -y lcov
     
     - name: Configure CMake
       run: |
@@ -56,7 +58,8 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
-    
+    container:
+      image: chocotechnologies/dmod:1.0.2
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -65,8 +68,8 @@ jobs:
     
     - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential lcov
+        apt-get update
+        apt-get install -y lcov
     
     - name: Configure CMake with coverage
       run: |

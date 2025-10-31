@@ -11,6 +11,8 @@ project(dmheap
     DESCRIPTION "DMOD Heap Memory Manager"
     LANGUAGES C CXX)
 
+set(DMHEAP_DONT_IMPLEMENT_DMOD_API OFF CACHE BOOL "Do not implement DMOD API in dmheap library")
+
 # ======================================================================
 #               Fetch DMOD repository
 # ======================================================================
@@ -38,6 +40,11 @@ set(DMOD_DIR ${dmod_SOURCE_DIR} CACHE PATH "DMOD source directory" FORCE)
 set(MODULE_NAME dmheap)
 add_library(${MODULE_NAME} STATIC
     src/dmheap.c
+)
+
+target_compile_definitions(${MODULE_NAME} 
+    PRIVATE 
+        $<$<BOOL:${DMHEAP_DONT_IMPLEMENT_DMOD_API}>:DMHEAP_DONT_IMPLEMENT_DMOD_API>
 )
 
 target_include_directories(${MODULE_NAME} 
