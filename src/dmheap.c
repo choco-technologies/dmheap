@@ -570,11 +570,13 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _realloc, ( void* ptr, size_t si
     void* new_ptr = NULL;
     if(size < block->size)
     {
+        remove_block( &g_dmheap_context.used_list, block );
         block_t* new_block = split_block( block, size );
         if( new_block != NULL )
         {
             add_block( &g_dmheap_context.free_list, new_block );
         }
+        add_block( &g_dmheap_context.used_list, block );
         new_ptr = ptr;
     }
     else if(size > block->size)
