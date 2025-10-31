@@ -67,6 +67,21 @@ static size_t align_size( size_t size, size_t alignment )
 }
 
 /**
+ * @brief Set the next pointer of a block.
+ * 
+ * @param block Pointer to the block.
+ * @param next  Pointer to the next block.
+ */
+static void block_set_next( block_t* block, block_t* next )
+{
+    DMOD_ASSERT(block != next);
+    if( block != NULL )
+    {
+        block->next = next;
+    }
+}
+
+/**
  * @brief Create a new memory block.
  * 
  * @param address Pointer to the start of the block.
@@ -77,7 +92,7 @@ static size_t align_size( size_t size, size_t alignment )
 static block_t* create_block( void* address, size_t size )
 {
     block_t* block = (block_t*)address;
-    block->next    = NULL;
+    block_set_next(block, NULL);
     block->address = (void*)((uintptr_t)address + sizeof(block_t));
     block->size    = size - sizeof(block_t);
     return block;
@@ -109,9 +124,9 @@ static block_t* split_block( block_t* block, size_t size )
 
     void* new_block_address = (void*)((uintptr_t)block->address + aligned_size);
     block_t* new_block = create_block( new_block_address, block->size - aligned_size );
-    new_block->next = block->next;
+    block_set_next(new_block, block->next);
     new_block->owner = block->owner;
-    block->next = new_block;
+    block_set_next(block, new_block);
     block->size = aligned_size;
 
     return new_block;
@@ -137,7 +152,7 @@ static block_t* merge_blocks( block_t* first, block_t* second )
     }
 
     first->size += sizeof(block_t) + second->size;
-    first->next = second->next;
+    block_set_next(first, second->next);
 
     return first;
 }
@@ -166,7 +181,8 @@ static void remove_block( block_t** list_head, block_t* block_to_remove )
     {
         if( current->next == block_to_remove )
         {
-            current->next = block_to_remove->next;
+            block_set_next(current, block_to_remove->next);
+            block_set_next(block_to_remove, NULL);
             return;
         }
         current = current->next;
@@ -186,7 +202,7 @@ static void add_block( block_t** list_head, block_t* block_to_add )
         return;
     }
 
-    block_to_add->next = *list_head;
+    block_set_next(block_to_add, *list_head);
     *list_head = block_to_add;
 }
 
@@ -326,6 +342,7 @@ static module_t* create_module( const char* name )
         DMOD_LOG_ERROR("dmheap: Unable to allocate memory for module %s.\n", name);
         return NULL;
     }
+    remove_block( &g_dmheap_context.free_list, block );
     if(block->size > (sizeof(module_t) + sizeof(block_t) + g_dmheap_context.alignment))
     {
         block_t* new_block = split_block( block, sizeof(module_t) );
@@ -334,7 +351,6 @@ static module_t* create_module( const char* name )
             add_block( &g_dmheap_context.free_list, new_block );
         }
     }
-    remove_block( &g_dmheap_context.free_list, block );
     module_t* module = (module_t*)block->address;
     strncpy( module->name, name, DMOD_MAX_MODULE_NAME_LENGTH - 1 );
     module->name[DMOD_MAX_MODULE_NAME_LENGTH - 1] = '\0';
@@ -370,7 +386,7 @@ static void release_memory_of_module( module_t* module )
             }
             else
             {
-                prev->next = current->next;
+                block_set_next(prev, current->next);
                 current = prev->next;
             }
             add_block( &g_dmheap_context.free_list, to_free );
@@ -436,6 +452,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _init, ( void* buffer, size_t si
     g_dmheap_context.free_list  = create_block( buffer, size );
     g_dmheap_context.used_list  = NULL;
     g_dmheap_context.alignment  = alignment;
+    g_dmheap_context.module_list = NULL;  // Reset module list on initialization
     Dmod_ExitCritical();
     DMOD_LOG_INFO("dmheap: Initialized with buffer %p of size %zu.\n", buffer, size);
     return true;
@@ -511,11 +528,13 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _realloc, ( void* ptr, size_t si
     void* new_ptr = NULL;
     if(size < block->size)
     {
+        remove_block( &g_dmheap_context.used_list, block );
         block_t* new_block = split_block( block, size );
         if( new_block != NULL )
         {
             add_block( &g_dmheap_context.free_list, new_block );
         }
+        add_block( &g_dmheap_context.used_list, block );
         new_ptr = ptr;
     }
     else if(size > block->size)
@@ -589,9 +608,13 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignme
     void* aligned_address = align_pointer( block->address, alignment );
     size_t padding = (size_t)((uintptr_t)aligned_address - (uintptr_t)block->address);
 
+    // First remove the block from free_list before splitting
+    remove_block( &g_dmheap_context.free_list, block );
+
     // If there's any padding, we need to handle it
     if( padding > 0 )
     {
+        
         // Create a new block for the usable part
         block_t* usable_block = split_block( block, padding );
         if( usable_block != NULL )
@@ -603,6 +626,8 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignme
         }
         else
         {
+            // If split failed, put the block back to free_list
+            add_block( &g_dmheap_context.free_list, block );
             // If we are here, something went wrong, 
             // because find_suitable_block should have ensured enough space
             // for splitting if padding was needed.
@@ -622,8 +647,6 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignme
             add_block( &g_dmheap_context.free_list, new_block );
         }
     }
-
-    remove_block( &g_dmheap_context.free_list, block );
 
     module_t* module = module_name != NULL ? get_or_create_module( module_name ) : NULL;
     block->owner = module;

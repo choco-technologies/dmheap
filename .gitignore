@@ -16,6 +16,7 @@
 build/*
 build_*/
 build-*/
+_codeql_build_dir/*
 out/*
 and_whatever_fcking_copilot_creates_for_builds/*
 _codeql_*
@@ -61,3 +62,10 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Coverage files
+*.gcno
+*.gcda
+*.gcov
+coverage.info
+coverage/
