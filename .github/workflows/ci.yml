@@ -2,13 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop, copilot/* ]
+    branches: [ main, develop, copilot/*, feature/* ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, develop, feature/* ]
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: chocotechnologies/dmod:1.0.2
     
     steps:
     - name: Checkout code
