@@ -228,6 +228,7 @@ All simple tests completed!
 
 ```c
 #include "dmheap.h"
+#include <string.h>
 
 // 1. Define your heap buffer
 #define HEAP_SIZE (64 * 1024)  // 64KB
@@ -281,6 +282,8 @@ void module_example(void) {
 
 ```c
 #include "dmheap.h"
+#include <assert.h>
+#include <stdint.h>
 
 void aligned_example(void) {
     // Allocate 1KB with 64-byte alignment (for DMA, SIMD, etc.)
@@ -380,6 +383,7 @@ target_link_libraries(my_app PRIVATE dmheap)
 #include "dmod.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 
 // Define heap for the entire system
 #define SYSTEM_HEAP_SIZE (256 * 1024)  // 256KB
