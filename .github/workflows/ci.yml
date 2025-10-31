@@ -88,7 +88,7 @@ jobs:
       run: |
         cd build
         lcov --directory . --capture --output-file coverage.info
-        lcov --remove coverage.info '/usr/*' '*/build/_deps/*' --output-file coverage_filtered.info
+        lcov --remove coverage.info '/usr/*' '*/build/_deps/*' --output-file coverage_filtered.info --ignore-errors unused
         lcov --list coverage_filtered.info
     
     - name: Generate HTML coverage report
