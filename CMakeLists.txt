@@ -75,9 +75,9 @@ create_library_makefile(${MODULE_NAME})
 # ======================================================================
 #               Tests
 # ======================================================================
-option(BUILD_TESTS "Build tests" ON)
+option(DMHEAP_BUILD_TESTS "Build tests" OFF)
 
-if(BUILD_TESTS)
+if(DMHEAP_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()

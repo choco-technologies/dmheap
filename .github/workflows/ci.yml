@@ -27,7 +27,7 @@ jobs:
       run: |
         mkdir -p build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DDMHEAP_BUILD_TESTS=ON
     
     - name: Build
       run: |
@@ -75,7 +75,7 @@ jobs:
       run: |
         mkdir -p build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Debug -DENABLE_COVERAGE=ON
+        cmake .. -DCMAKE_BUILD_TYPE=Debug -DENABLE_COVERAGE=ON -DDMHEAP_BUILD_TESTS=ON
     
     - name: Build with coverage
       run: |
