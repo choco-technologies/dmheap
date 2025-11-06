@@ -50,6 +50,13 @@ endif()
 # ======================================================================
 #               DMOD Heap Library
 # ======================================================================
+# Generate version header
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/dmheap_version.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/include/dmheap_version.h
+    @ONLY
+)
+
 set(MODULE_NAME dmheap)
 add_library(${MODULE_NAME} STATIC
     src/dmheap.c
@@ -63,6 +70,7 @@ target_compile_definitions(${MODULE_NAME}
 target_include_directories(${MODULE_NAME} 
     PUBLIC 
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_BINARY_DIR}/include
 )   
 
 target_link_libraries(${MODULE_NAME} 
