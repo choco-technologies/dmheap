@@ -17,12 +17,11 @@ endif
 DMOD_LIB_NAME=libdmheap.a
 DMOD_SOURCES=src/dmheap.c
 DMOD_INC_DIRS = include\
-		build/include\
 		$(DMOD_DIR)/inc\
 		build/_deps/dmod-build
 DMOD_LIBS = dmod_inc
 DMOD_GEN_HEADERS_IN = 
-DMOD_DEFINITIONS = $<$<BOOL:OFF>:DMHEAP_DONT_IMPLEMENT_DMOD_API>
+DMOD_DEFINITIONS = $<$<BOOL:OFF>:DMHEAP_DONT_IMPLEMENT_DMOD_API>;DMHEAP_VERSION="1.0"
 
 # -----------------------------------------------------------------------------
 # 	Initialization of paths
