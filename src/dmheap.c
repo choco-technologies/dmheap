@@ -2,6 +2,8 @@
 #include <string.h>
 #include <stdint.h>
 
+#define DMHEAP_VERSION "1.0"
+
 /**
  * @brief Structure to represent a registered module.
  */
@@ -454,6 +456,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _init, ( void* buffer, size_t si
     g_dmheap_context.alignment  = alignment;
     g_dmheap_context.module_list = NULL;  // Reset module list on initialization
     Dmod_ExitCritical();
+    DMOD_LOG_INFO("== dmheap ver. %s ==\n", DMHEAP_VERSION);
     DMOD_LOG_INFO("dmheap: Initialized with buffer %p of size %zu.\n", buffer, size);
     return true;
 }
