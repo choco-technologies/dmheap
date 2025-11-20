@@ -616,16 +616,20 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignme
     if( padding > 0 )
     {
         
+        // Calculate the split point to position the new block's data at aligned_address
+        // The new block structure will be at aligned_address - sizeof(block_t)
+        // So we need to split at: (aligned_address - sizeof(block_t)) - block->address
+        size_t split_at = padding - sizeof(block_t);
+        
         // Create a new block for the usable part
-        block_t* usable_block = split_block( block, padding );
+        block_t* usable_block = split_block( block, split_at );
         if( usable_block != NULL )
         {
             // block now contains the padding area, add it to free list
             add_block( &g_dmheap_context.free_list, block );
             // usable_block is what we'll actually use for allocation
             block = usable_block;
-            // After split, the new block's address is already properly aligned
-            aligned_address = block->address;
+            // The usable_block's data (block->address) should now be at aligned_address
         }
         else
         {
