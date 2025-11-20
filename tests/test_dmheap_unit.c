@@ -114,6 +114,56 @@ static void test_aligned_allocation(void) {
     dmheap_free(ptr3, false);
 }
 
+// Test: Aligned allocation with padding (regression test for bug fix)
+static void test_aligned_allocation_with_padding(void) {
+    printf("\n=== Testing Aligned Allocation with Padding (Bug Fix) ===\n");
+    reset_heap();
+    
+    // This test specifically checks that aligned_alloc returns the correct address
+    // when padding is needed. The bug was that it returned the address of the block
+    // structure instead of the data area after splitting for alignment padding.
+    
+    // Test 1: Allocate with alignment that will likely require padding
+    void* ptr1 = dmheap_aligned_alloc(64, 128, "test_module");
+    ASSERT_TEST(ptr1 != NULL, "Allocate with 64-byte alignment");
+    ASSERT_TEST(((uintptr_t)ptr1 % 64) == 0, "Pointer is 64-byte aligned");
+    
+    // Write to the allocated memory - if bug exists, this corrupts the used_list
+    memset(ptr1, 0xAA, 128);
+    ASSERT_TEST(((unsigned char*)ptr1)[0] == 0xAA, "Write to aligned allocation");
+    ASSERT_TEST(((unsigned char*)ptr1)[127] == 0xAA, "Full buffer is writable");
+    
+    // Allocate a second block to verify the used_list is intact
+    void* ptr2 = dmheap_malloc(64, "test_module");
+    ASSERT_TEST(ptr2 != NULL, "Second allocation succeeds (list not corrupted)");
+    
+    // Free the first allocation - if bug exists and corrupted used_list, this will crash
+    dmheap_free(ptr1, false);
+    printf("[INFO] First free succeeded (used_list intact)\n");
+    
+    // Free second allocation
+    dmheap_free(ptr2, false);
+    printf("[INFO] Second free succeeded\n");
+    
+    // Test 2: Larger alignment to force more padding
+    void* ptr3 = dmheap_aligned_alloc(256, 512, "test_module");
+    ASSERT_TEST(ptr3 != NULL, "Allocate with 256-byte alignment");
+    ASSERT_TEST(((uintptr_t)ptr3 % 256) == 0, "Pointer is 256-byte aligned");
+    
+    // Write pattern
+    memset(ptr3, 0xBB, 512);
+    ASSERT_TEST(((unsigned char*)ptr3)[0] == 0xBB, "Write to large aligned allocation");
+    
+    // Allocate another block to verify list integrity
+    void* ptr4 = dmheap_malloc(32, "test_module");
+    ASSERT_TEST(ptr4 != NULL, "Allocation after large aligned alloc succeeds");
+    
+    // Free both
+    dmheap_free(ptr3, false);
+    dmheap_free(ptr4, false);
+    printf("[INFO] All allocations freed successfully\n");
+}
+
 // Test: Reallocation
 static void test_reallocation(void) {
     printf("\n=== Testing Reallocation ===\n");
@@ -425,6 +475,7 @@ int main(void) {
     test_module_registration();
     test_basic_allocation();
     test_aligned_allocation();
+    test_aligned_allocation_with_padding();
     test_reallocation();
     test_free_and_concatenate();
     test_large_allocation();

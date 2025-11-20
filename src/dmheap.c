@@ -624,6 +624,8 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignme
             add_block( &g_dmheap_context.free_list, block );
             // usable_block is what we'll actually use for allocation
             block = usable_block;
+            // After split, the new block's address is already properly aligned
+            aligned_address = block->address;
         }
         else
         {
