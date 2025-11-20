@@ -375,6 +375,68 @@ static void test_fragmentation(void) {
     }
 }
 
+// Test: Multiple independent contexts
+static void test_multiple_contexts(void) {
+    TEST_SECTION("Multiple Independent Contexts");
+    
+    // Create two separate heaps
+    #define CTX1_SIZE (64 * 1024)  // 64KB
+    #define CTX2_SIZE (128 * 1024) // 128KB
+    static char heap1[CTX1_SIZE];
+    static char heap2[CTX2_SIZE];
+    
+    // Initialize two independent contexts
+    dmheap_context_t* ctx1 = dmheap_init(heap1, CTX1_SIZE, 8);
+    dmheap_context_t* ctx2 = dmheap_init(heap2, CTX2_SIZE, 16); // Different alignment
+    
+    ASSERT_TEST(ctx1 != NULL, "Initialize first context");
+    ASSERT_TEST(ctx2 != NULL, "Initialize second context");
+    ASSERT_TEST(ctx1 != ctx2, "Contexts are different");
+    
+    // Allocate memory from both contexts
+    void* ptr1_from_ctx1 = dmheap_malloc(ctx1, 1024, "module1");
+    void* ptr2_from_ctx1 = dmheap_malloc(ctx1, 2048, "module1");
+    void* ptr1_from_ctx2 = dmheap_malloc(ctx2, 4096, "module2");
+    void* ptr2_from_ctx2 = dmheap_malloc(ctx2, 8192, "module2");
+    
+    ASSERT_TEST(ptr1_from_ctx1 != NULL, "Allocate from context 1 (1)");
+    ASSERT_TEST(ptr2_from_ctx1 != NULL, "Allocate from context 1 (2)");
+    ASSERT_TEST(ptr1_from_ctx2 != NULL, "Allocate from context 2 (1)");
+    ASSERT_TEST(ptr2_from_ctx2 != NULL, "Allocate from context 2 (2)");
+    
+    // Verify that allocations from different contexts have different addresses
+    ASSERT_TEST(ptr1_from_ctx1 != ptr1_from_ctx2, "Allocations from different contexts are different");
+    
+    // Write different patterns to each allocation
+    memset(ptr1_from_ctx1, 0xAA, 1024);
+    memset(ptr1_from_ctx2, 0xBB, 4096);
+    
+    // Verify patterns
+    ASSERT_TEST(((unsigned char*)ptr1_from_ctx1)[0] == 0xAA, "Context 1 data intact");
+    ASSERT_TEST(((unsigned char*)ptr1_from_ctx2)[0] == 0xBB, "Context 2 data intact");
+    
+    // Free memory from context 1
+    dmheap_free(ctx1, ptr1_from_ctx1, false);
+    dmheap_free(ctx1, ptr2_from_ctx1, false);
+    
+    // Verify context 2 allocations are still valid
+    ASSERT_TEST(((unsigned char*)ptr1_from_ctx2)[0] == 0xBB, "Context 2 data still intact after freeing context 1 data");
+    
+    // Free memory from context 2
+    dmheap_free(ctx2, ptr1_from_ctx2, false);
+    dmheap_free(ctx2, ptr2_from_ctx2, false);
+    
+    printf("[INFO] Successfully tested multiple independent contexts\n");
+    
+    // Test using default context
+    dmheap_set_default_context(ctx1);
+    void* ptr_default = dmheap_malloc(NULL, 512, "default_module");
+    ASSERT_TEST(ptr_default != NULL, "Allocate using default context");
+    dmheap_free(NULL, ptr_default, false);
+    
+    printf("[INFO] Successfully tested default context fallback\n");
+}
+
 // Performance benchmark
 static void benchmark_allocations(void) {
     TEST_SECTION("Performance Benchmark");
@@ -484,6 +546,7 @@ int main(void) {
     test_module_cleanup();
     // test_edge_cases();  // TODO: Temporarily disabled - double free triggers assertion
     test_fragmentation();
+    test_multiple_contexts();
     benchmark_allocations();
     
     // Print summary
