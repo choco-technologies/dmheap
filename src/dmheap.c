@@ -467,8 +467,17 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buff
         return NULL;
     }
     
+    // Check buffer alignment for context structure
+    if(((uintptr_t)buffer % sizeof(void*)) != 0)
+    {
+        DMOD_LOG_ERROR("dmheap: buffer is not properly aligned (must be aligned to pointer size).\n");
+        return NULL;
+    }
+    
     // The context structure is stored at the beginning of the buffer
-    if(size < sizeof(dmheap_context_t) + sizeof(block_t) + alignment)
+    // Align context size to ensure heap starts at a proper boundary
+    size_t context_size = align_size(sizeof(dmheap_context_t), alignment > sizeof(void*) ? alignment : sizeof(void*));
+    if(size < context_size + sizeof(block_t) + alignment)
     {
         DMOD_LOG_ERROR("dmheap: buffer too small for context and minimum allocation.\n");
         return NULL;
@@ -477,9 +486,9 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buff
     Dmod_EnterCritical();
     dmheap_context_t* ctx = (dmheap_context_t*)buffer;
     
-    // Calculate the start of the heap (after the context structure)
-    void* heap_buffer = (void*)((uintptr_t)buffer + sizeof(dmheap_context_t));
-    size_t heap_size = size - sizeof(dmheap_context_t);
+    // Calculate the start of the heap (after the aligned context structure)
+    void* heap_buffer = (void*)((uintptr_t)buffer + context_size);
+    size_t heap_size = size - context_size;
     
     ctx->heap_start = heap_buffer;
     ctx->heap_size  = heap_size;
