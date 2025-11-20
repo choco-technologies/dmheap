@@ -615,28 +615,77 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignme
     // If there's any padding, we need to handle it
     if( padding > 0 )
     {
-        
-        // Create a new block for the usable part
-        block_t* usable_block = split_block( block, padding );
-        if( usable_block != NULL )
+        // Check if we have enough padding to place a block structure before the aligned address
+        if( padding >= sizeof(block_t) )
         {
-            // block now contains the padding area, add it to free list
-            add_block( &g_dmheap_context.free_list, block );
-            // usable_block is what we'll actually use for allocation
-            block = usable_block;
+            // Calculate the split point to position the new block's data at aligned_address
+            // The new block structure will be at aligned_address - sizeof(block_t)
+            // So we need to split at: (aligned_address - sizeof(block_t)) - block->address
+            size_t split_at = padding - sizeof(block_t);
+            
+            // Create a new block for the usable part
+            block_t* usable_block = split_block( block, split_at );
+            if( usable_block != NULL )
+            {
+                // block now contains the padding area, add it to free list
+                add_block( &g_dmheap_context.free_list, block );
+                // usable_block is what we'll actually use for allocation
+                block = usable_block;
+                // The usable_block's data (block->address) should now be at aligned_address
+            }
+            else
+            {
+                // If split failed, put the block back to free_list
+                add_block( &g_dmheap_context.free_list, block );
+                // If we are here, something went wrong, 
+                // because find_suitable_block should have ensured enough space
+                // for splitting if padding was needed.
+                DMOD_ASSERT_MSG(false, "Unexpected error - check find_suitable_block logic.");
+                // Split failed, can't use this block efficiently
+                Dmod_ExitCritical();
+                DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s - split failed.\n", size, alignment, module_name);
+                return NULL;
+            }
         }
         else
         {
-            // If split failed, put the block back to free_list
-            add_block( &g_dmheap_context.free_list, block );
-            // If we are here, something went wrong, 
-            // because find_suitable_block should have ensured enough space
-            // for splitting if padding was needed.
-            DMOD_ASSERT_MSG(false, "Unexpected error - check find_suitable_block logic.");
-            // Split failed, can't use this block efficiently
-            Dmod_ExitCritical();
-            DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s - split failed.\n", size, alignment, module_name);
-            return NULL;
+            // Padding is too small to fit a block structure.
+            // In this case, we skip ahead to the next aligned position that can accommodate
+            // both the block structure and be properly aligned.
+            // Calculate the next suitable aligned position
+            size_t needed_space = sizeof(block_t) + aligned_size;
+            void* search_start = (void*)((uintptr_t)block->address + sizeof(block_t));
+            void* next_aligned = align_pointer( search_start, alignment );
+            size_t new_padding = (size_t)((uintptr_t)next_aligned - (uintptr_t)block->address);
+            
+            if( new_padding >= sizeof(block_t) && block->size >= new_padding - sizeof(block_t) + aligned_size )
+            {
+                // Split at the position before the next aligned address
+                size_t split_at = new_padding - sizeof(block_t);
+                block_t* usable_block = split_block( block, split_at );
+                if( usable_block != NULL )
+                {
+                    add_block( &g_dmheap_context.free_list, block );
+                    block = usable_block;
+                    aligned_address = block->address;  // Update aligned_address to the actual position
+                }
+                else
+                {
+                    // Can't split, return the block to free list and fail
+                    add_block( &g_dmheap_context.free_list, block );
+                    Dmod_ExitCritical();
+                    DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s - insufficient padding.\n", size, alignment, module_name);
+                    return NULL;
+                }
+            }
+            else
+            {
+                // Not enough space, return the block and fail
+                add_block( &g_dmheap_context.free_list, block );
+                Dmod_ExitCritical();
+                DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s - insufficient space.\n", size, alignment, module_name);
+                return NULL;
+            }
         }
     }
 
