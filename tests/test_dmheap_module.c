@@ -14,7 +14,8 @@ static char test_heap[TEST_HEAP_SIZE];
 // Helper function to reset heap
 static void reset_heap(void) {
     memset(test_heap, 0, TEST_HEAP_SIZE);
-    dmheap_init(test_heap, TEST_HEAP_SIZE, 8);
+    dmheap_context_t* ctx = dmheap_init(test_heap, TEST_HEAP_SIZE, 8);
+    dmheap_set_default_context(ctx);
 }
 
 // Simulate a simple allocator for a "file system" module
@@ -22,7 +23,7 @@ static void test_filesystem_simulation(void) {
     printf("\n=== Testing FileSystem Module Simulation ===\n");
     reset_heap();
     
-    dmheap_register_module("filesystem");
+    dmheap_register_module(NULL, "filesystem");
     
     // Simulate file metadata allocation
     typedef struct {
@@ -31,13 +32,13 @@ static void test_filesystem_simulation(void) {
         void* data;
     } file_t;
     
-    file_t* file1 = (file_t*)dmheap_malloc(sizeof(file_t), "filesystem");
+    file_t* file1 = (file_t*)dmheap_malloc(NULL, sizeof(file_t), "filesystem");
     ASSERT_TEST(file1 != NULL, "Allocate file1 metadata");
     
     if (file1) {
         strcpy(file1->filename, "test.txt");
         file1->size = 1024;
-        file1->data = dmheap_malloc(file1->size, "filesystem");
+        file1->data = dmheap_malloc(NULL, file1->size, "filesystem");
         ASSERT_TEST(file1->data != NULL, "Allocate file1 data");
         
         if (file1->data) {
@@ -45,13 +46,13 @@ static void test_filesystem_simulation(void) {
         }
     }
     
-    file_t* file2 = (file_t*)dmheap_malloc(sizeof(file_t), "filesystem");
+    file_t* file2 = (file_t*)dmheap_malloc(NULL, sizeof(file_t), "filesystem");
     ASSERT_TEST(file2 != NULL, "Allocate file2 metadata");
     
     if (file2) {
         strcpy(file2->filename, "data.bin");
         file2->size = 2048;
-        file2->data = dmheap_malloc(file2->size, "filesystem");
+        file2->data = dmheap_malloc(NULL, file2->size, "filesystem");
         ASSERT_TEST(file2->data != NULL, "Allocate file2 data");
         
         if (file2->data) {
@@ -60,12 +61,12 @@ static void test_filesystem_simulation(void) {
     }
     
     // Cleanup
-    if (file1 && file1->data) dmheap_free(file1->data, false);
-    if (file1) dmheap_free(file1, false);
-    if (file2 && file2->data) dmheap_free(file2->data, false);
-    if (file2) dmheap_free(file2, false);
+    if (file1 && file1->data) dmheap_free(NULL, file1->data, false);
+    if (file1) dmheap_free(NULL, file1, false);
+    if (file2 && file2->data) dmheap_free(NULL, file2->data, false);
+    if (file2) dmheap_free(NULL, file2, false);
     
-    dmheap_unregister_module("filesystem");
+    dmheap_unregister_module(NULL, "filesystem");
     printf("[INFO] FileSystem module test completed\n");
 }
 
@@ -74,7 +75,7 @@ static void test_network_buffer_pool(void) {
     printf("\n=== Testing Network Buffer Pool ===\n");
     reset_heap();
     
-    dmheap_register_module("network");
+    dmheap_register_module(NULL, "network");
     
     #define NUM_BUFFERS 20  // Reduced from 50
     #define BUFFER_SIZE 512
@@ -84,7 +85,7 @@ static void test_network_buffer_pool(void) {
     
     // Allocate buffer pool
     for (int i = 0; i < NUM_BUFFERS; i++) {
-        buffers[i] = dmheap_malloc(BUFFER_SIZE, "network");
+        buffers[i] = dmheap_malloc(NULL, BUFFER_SIZE, "network");
         if (buffers[i] != NULL) {
             allocated++;
             // Simulate packet data
@@ -98,7 +99,7 @@ static void test_network_buffer_pool(void) {
     // Free some buffers (simulate processed packets)
     for (int i = 0; i < NUM_BUFFERS; i += 2) {
         if (buffers[i] != NULL) {
-            dmheap_free(buffers[i], false);
+            dmheap_free(NULL, buffers[i], false);
             buffers[i] = NULL;
         }
     }
@@ -106,7 +107,7 @@ static void test_network_buffer_pool(void) {
     // Reallocate freed buffers
     int reallocated = 0;
     for (int i = 0; i < NUM_BUFFERS; i += 2) {
-        buffers[i] = dmheap_malloc(BUFFER_SIZE, "network");
+        buffers[i] = dmheap_malloc(NULL, BUFFER_SIZE, "network");
         if (buffers[i] != NULL) {
             reallocated++;
         }
@@ -118,11 +119,11 @@ static void test_network_buffer_pool(void) {
     // Cleanup
     for (int i = 0; i < NUM_BUFFERS; i++) {
         if (buffers[i] != NULL) {
-            dmheap_free(buffers[i], false);
+            dmheap_free(NULL, buffers[i], false);
         }
     }
     
-    dmheap_unregister_module("network");
+    dmheap_unregister_module(NULL, "network");
     printf("[INFO] Network buffer pool test completed\n");
 }
 
@@ -132,38 +133,38 @@ static void test_multi_module_usage(void) {
     reset_heap();
     
     // Register multiple modules
-    dmheap_register_module("graphics");
-    dmheap_register_module("audio");
-    dmheap_register_module("input");
+    dmheap_register_module(NULL, "graphics");
+    dmheap_register_module(NULL, "audio");
+    dmheap_register_module(NULL, "input");
     
     // Allocate for different modules
-    void* graphics_buffer = dmheap_malloc(10240, "graphics");
-    void* audio_buffer = dmheap_malloc(4096, "audio");
-    void* input_buffer = dmheap_malloc(256, "input");
+    void* graphics_buffer = dmheap_malloc(NULL, 10240, "graphics");
+    void* audio_buffer = dmheap_malloc(NULL, 4096, "audio");
+    void* input_buffer = dmheap_malloc(NULL, 256, "input");
     
     ASSERT_TEST(graphics_buffer != NULL, "Graphics module allocation");
     ASSERT_TEST(audio_buffer != NULL, "Audio module allocation");
     ASSERT_TEST(input_buffer != NULL, "Input module allocation");
     
     // Allocate more for graphics
-    void* graphics_buffer2 = dmheap_malloc(8192, "graphics");
+    void* graphics_buffer2 = dmheap_malloc(NULL, 8192, "graphics");
     ASSERT_TEST(graphics_buffer2 != NULL, "Second graphics allocation");
     
     // Unregister graphics module (should free its allocations)
-    dmheap_unregister_module("graphics");
+    dmheap_unregister_module(NULL, "graphics");
     printf("[INFO] Graphics module unregistered\n");
     
     // Audio and input should still work
-    void* audio_buffer2 = dmheap_malloc(2048, "audio");
+    void* audio_buffer2 = dmheap_malloc(NULL, 2048, "audio");
     ASSERT_TEST(audio_buffer2 != NULL, "Audio allocation after graphics cleanup");
     
     // Cleanup remaining modules
-    dmheap_free(audio_buffer, false);
-    dmheap_free(audio_buffer2, false);
-    dmheap_free(input_buffer, false);
+    dmheap_free(NULL, audio_buffer, false);
+    dmheap_free(NULL, audio_buffer2, false);
+    dmheap_free(NULL, input_buffer, false);
     
-    dmheap_unregister_module("audio");
-    dmheap_unregister_module("input");
+    dmheap_unregister_module(NULL, "audio");
+    dmheap_unregister_module(NULL, "input");
     
     printf("[INFO] Multi-module test completed\n");
 }
@@ -173,7 +174,7 @@ static void test_dynamic_data_structure(void) {
     printf("\n=== Testing Dynamic Data Structure ===\n");
     reset_heap();
     
-    dmheap_register_module("datastructure");
+    dmheap_register_module(NULL, "datastructure");
     
     typedef struct node {
         int value;
@@ -185,7 +186,7 @@ static void test_dynamic_data_structure(void) {
     
     // Build linked list
     for (int i = 0; i < 20; i++) {
-        node_t* new_node = (node_t*)dmheap_malloc(sizeof(node_t), "datastructure");
+        node_t* new_node = (node_t*)dmheap_malloc(NULL, sizeof(node_t), "datastructure");
         if (new_node != NULL) {
             new_node->value = i * 10;
             new_node->next = NULL;
@@ -215,11 +216,11 @@ static void test_dynamic_data_structure(void) {
     current = head;
     while (current != NULL) {
         node_t* next = current->next;
-        dmheap_free(current, false);
+        dmheap_free(NULL, current, false);
         current = next;
     }
     
-    dmheap_unregister_module("datastructure");
+    dmheap_unregister_module(NULL, "datastructure");
     printf("[INFO] Dynamic data structure test completed\n");
 }
 
@@ -228,35 +229,35 @@ static void test_memory_reuse(void) {
     printf("\n=== Testing Memory Reuse ===\n");
     reset_heap();
     
-    dmheap_register_module("reuse_test");
+    dmheap_register_module(NULL, "reuse_test");
     
     // Allocate and free in a pattern
-    void* ptr1 = dmheap_malloc(1024, "reuse_test");
-    void* ptr2 = dmheap_malloc(1024, "reuse_test");
-    void* ptr3 = dmheap_malloc(1024, "reuse_test");
+    void* ptr1 = dmheap_malloc(NULL, 1024, "reuse_test");
+    void* ptr2 = dmheap_malloc(NULL, 1024, "reuse_test");
+    void* ptr3 = dmheap_malloc(NULL, 1024, "reuse_test");
     
     ASSERT_TEST(ptr1 != NULL && ptr2 != NULL && ptr3 != NULL, 
                 "Initial allocations successful");
     
     // Free middle block
-    dmheap_free(ptr2, false);
+    dmheap_free(NULL, ptr2, false);
     
     // Allocate smaller block (should reuse freed space)
-    void* ptr4 = dmheap_malloc(512, "reuse_test");
+    void* ptr4 = dmheap_malloc(NULL, 512, "reuse_test");
     ASSERT_TEST(ptr4 != NULL, "Reused freed memory for smaller allocation");
     
     // Free all
-    dmheap_free(ptr1, false);
-    dmheap_free(ptr3, false);
-    dmheap_free(ptr4, false);
+    dmheap_free(NULL, ptr1, false);
+    dmheap_free(NULL, ptr3, false);
+    dmheap_free(NULL, ptr4, false);
     
     // Concatenate and allocate large block
-    dmheap_concatenate_free_blocks();
-    void* large = dmheap_malloc(3000, "reuse_test");
+    dmheap_concatenate_free_blocks(NULL);
+    void* large = dmheap_malloc(NULL, 3000, "reuse_test");
     ASSERT_TEST(large != NULL, "Large allocation after concatenation");
     
-    if (large) dmheap_free(large, false);
-    dmheap_unregister_module("reuse_test");
+    if (large) dmheap_free(NULL, large, false);
+    dmheap_unregister_module(NULL, "reuse_test");
     
     printf("[INFO] Memory reuse test completed\n");
 }
@@ -266,7 +267,7 @@ static void test_alignment_requirements(void) {
     printf("\n=== Testing Alignment Requirements ===\n");
     reset_heap();
     
-    dmheap_register_module("alignment_test");
+    dmheap_register_module(NULL, "alignment_test");
     
     // Test various alignments
     struct alignments {
@@ -284,17 +285,17 @@ static void test_alignment_requirements(void) {
     };
     
     for (int i = 0; i < sizeof(tests) / sizeof(tests[0]); i++) {
-        void* ptr = dmheap_aligned_alloc(tests[i].alignment, 256, "alignment_test");
+        void* ptr = dmheap_aligned_alloc(NULL, tests[i].alignment, 256, "alignment_test");
         if (ptr != NULL) {
             bool aligned = ((uintptr_t)ptr % tests[i].alignment) == 0;
             char msg[64];
             snprintf(msg, sizeof(msg), "%s alignment correct", tests[i].name);
             ASSERT_TEST(aligned, msg);
-            dmheap_free(ptr, false);
+            dmheap_free(NULL, ptr, false);
         }
     }
     
-    dmheap_unregister_module("alignment_test");
+    dmheap_unregister_module(NULL, "alignment_test");
     printf("[INFO] Alignment requirements test completed\n");
 }
 
@@ -303,7 +304,7 @@ static void test_heap_exhaustion(void) {
     printf("\n=== Testing Heap Exhaustion and Recovery ===\n");
     reset_heap();
     
-    dmheap_register_module("exhaustion_test");
+    dmheap_register_module(NULL, "exhaustion_test");
     
     #define MAX_ALLOCS 100  // Reduced from 1000
     void* allocs[MAX_ALLOCS];
@@ -311,7 +312,7 @@ static void test_heap_exhaustion(void) {
     
     // Allocate until heap is exhausted
     for (int i = 0; i < MAX_ALLOCS; i++) {
-        allocs[i] = dmheap_malloc(10240, "exhaustion_test");  // Larger blocks to exhaust faster
+        allocs[i] = dmheap_malloc(NULL, 10240, "exhaustion_test");  // Larger blocks to exhaust faster
         if (allocs[i] == NULL) {
             break;
         }
@@ -322,33 +323,33 @@ static void test_heap_exhaustion(void) {
     ASSERT_TEST(num_allocs > 0, "Could allocate some blocks");
     
     // Try to allocate more (should fail only if heap was actually exhausted)
-    void* should_fail = dmheap_malloc(10240, "exhaustion_test");
+    void* should_fail = dmheap_malloc(NULL, 10240, "exhaustion_test");
     if (num_allocs < MAX_ALLOCS) {
         // Heap was exhausted during the loop
         ASSERT_TEST(should_fail == NULL, "Allocation fails when heap exhausted");
     } else {
         // Heap was not exhausted, allocation might succeed
         ASSERT_TEST(true, "Heap not exhausted with current test parameters");
-        if (should_fail) dmheap_free(should_fail, false);
+        if (should_fail) dmheap_free(NULL, should_fail, false);
     }
     
     // Free half of the allocations
     for (int i = 0; i < num_allocs / 2; i++) {
-        dmheap_free(allocs[i], false);
+        dmheap_free(NULL, allocs[i], false);
         allocs[i] = NULL;
     }
     
     // Now we should be able to allocate again
-    void* after_free = dmheap_malloc(10240, "exhaustion_test");
+    void* after_free = dmheap_malloc(NULL, 10240, "exhaustion_test");
     ASSERT_TEST(after_free != NULL, "Can allocate after freeing");
     
     // Cleanup
-    if (after_free) dmheap_free(after_free, false);
+    if (after_free) dmheap_free(NULL, after_free, false);
     for (int i = num_allocs / 2; i < num_allocs; i++) {
-        if (allocs[i]) dmheap_free(allocs[i], false);
+        if (allocs[i]) dmheap_free(NULL, allocs[i], false);
     }
     
-    dmheap_unregister_module("exhaustion_test");
+    dmheap_unregister_module(NULL, "exhaustion_test");
     printf("[INFO] Heap exhaustion test completed\n");
 }
 
@@ -357,7 +358,7 @@ static void test_mixed_allocation_sizes(void) {
     printf("\n=== Testing Mixed Allocation Sizes ===\n");
     reset_heap();
     
-    dmheap_register_module("mixed_test");
+    dmheap_register_module(NULL, "mixed_test");
     
     size_t sizes[] = {16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192};
     int num_sizes = sizeof(sizes) / sizeof(sizes[0]);
@@ -368,7 +369,7 @@ static void test_mixed_allocation_sizes(void) {
     // Allocate various sizes in random-ish pattern
     for (int i = 0; i < 50; i++) {
         size_t size = sizes[i % num_sizes];
-        ptrs[num_ptrs] = dmheap_malloc(size, "mixed_test");
+        ptrs[num_ptrs] = dmheap_malloc(NULL, size, "mixed_test");
         if (ptrs[num_ptrs] != NULL) {
             memset(ptrs[num_ptrs], i & 0xFF, size);
             num_ptrs++;
@@ -380,16 +381,16 @@ static void test_mixed_allocation_sizes(void) {
     
     // Free every third allocation
     for (int i = 0; i < num_ptrs; i += 3) {
-        dmheap_free(ptrs[i], false);
+        dmheap_free(NULL, ptrs[i], false);
     }
     
     // Reallocate some
     int reallocated = 0;
     for (int i = 0; i < 10; i++) {
-        void* ptr = dmheap_malloc(sizes[i % num_sizes], "mixed_test");
+        void* ptr = dmheap_malloc(NULL, sizes[i % num_sizes], "mixed_test");
         if (ptr != NULL) {
             reallocated++;
-            dmheap_free(ptr, false);
+            dmheap_free(NULL, ptr, false);
         }
     }
     
@@ -398,11 +399,11 @@ static void test_mixed_allocation_sizes(void) {
     // Cleanup
     for (int i = 0; i < num_ptrs; i++) {
         if (i % 3 != 0) {  // Skip already freed
-            dmheap_free(ptrs[i], false);
+            dmheap_free(NULL, ptrs[i], false);
         }
     }
     
-    dmheap_unregister_module("mixed_test");
+    dmheap_unregister_module(NULL, "mixed_test");
     printf("[INFO] Mixed allocation sizes test completed\n");
 }
 
@@ -419,9 +420,9 @@ static void benchmark_with_json(void) {
     // Benchmark malloc
     start = clock();
     for (int i = 0; i < iterations; i++) {
-        void* ptr = dmheap_malloc(64, "bench");
+        void* ptr = dmheap_malloc(NULL, 64, "bench");
         if (ptr == NULL) break;
-        dmheap_free(ptr, false);
+        dmheap_free(NULL, ptr, false);
     }
     end = clock();
     time_malloc = ((double)(end - start)) / CLOCKS_PER_SEC * 1000.0;
@@ -430,9 +431,9 @@ static void benchmark_with_json(void) {
     reset_heap();
     start = clock();
     for (int i = 0; i < iterations; i++) {
-        void* ptr = dmheap_aligned_alloc(16, 64, "bench");
+        void* ptr = dmheap_aligned_alloc(NULL, 16, 64, "bench");
         if (ptr == NULL) break;
-        dmheap_free(ptr, false);
+        dmheap_free(NULL, ptr, false);
     }
     end = clock();
     time_aligned = ((double)(end - start)) / CLOCKS_PER_SEC * 1000.0;
@@ -442,10 +443,10 @@ static void benchmark_with_json(void) {
     start = clock();
     void* ptr = NULL;
     for (int i = 0; i < iterations; i++) {
-        ptr = dmheap_realloc(ptr, 64 + (i % 128), "bench");
+        ptr = dmheap_realloc(NULL, ptr, 64 + (i % 128), "bench");
         if (ptr == NULL) break;
     }
-    if (ptr) dmheap_free(ptr, false);
+    if (ptr) dmheap_free(NULL, ptr, false);
     end = clock();
     time_realloc = ((double)(end - start)) / CLOCKS_PER_SEC * 1000.0;
     

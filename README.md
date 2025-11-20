@@ -235,21 +235,24 @@ All simple tests completed!
 static char heap_buffer[HEAP_SIZE];
 
 int main(void) {
-    // 2. Initialize the heap
-    bool success = dmheap_init(heap_buffer, HEAP_SIZE, 8);  // 8-byte alignment
-    if (!success) {
+    // 2. Initialize the heap (returns a context)
+    dmheap_context_t* ctx = dmheap_init(heap_buffer, HEAP_SIZE, 8);  // 8-byte alignment
+    if (ctx == NULL) {
         // Handle initialization failure
         return -1;
     }
     
-    // 3. Allocate memory
-    void* ptr = dmheap_malloc(256, "main");
+    // 3. Set as default context (optional - allows using NULL in API calls)
+    dmheap_set_default_context(ctx);
+    
+    // 4. Allocate memory (NULL uses default context)
+    void* ptr = dmheap_malloc(NULL, 256, "main");
     if (ptr != NULL) {
         // Use the memory
         memset(ptr, 0, 256);
         
-        // 4. Free memory
-        dmheap_free(ptr, false);
+        // 5. Free memory
+        dmheap_free(NULL, ptr, false);
     }
     
     return 0;
@@ -262,21 +265,65 @@ int main(void) {
 #include "dmheap.h"
 
 void module_example(void) {
-    // Register a module
-    dmheap_register_module("my_module");
+    // Register a module (NULL uses default context)
+    dmheap_register_module(NULL, "my_module");
     
     // Allocate memory for this module
-    void* data1 = dmheap_malloc(512, "my_module");
-    void* data2 = dmheap_malloc(1024, "my_module");
+    void* data1 = dmheap_malloc(NULL, 512, "my_module");
+    void* data2 = dmheap_malloc(NULL, 1024, "my_module");
     
     // Use the memory...
     
     // When done with the module, unregister it
     // This automatically frees ALL memory allocated by "my_module"
-    dmheap_unregister_module("my_module");
+    dmheap_unregister_module(NULL, "my_module");
     // data1 and data2 are now freed automatically!
 }
 ```
+
+### Multiple Independent Contexts
+
+One of the key features of the context-oriented design is the ability to create multiple independent heaps for different purposes:
+
+```c
+#include "dmheap.h"
+#include <string.h>
+
+// Example: Separate heaps for kernel and external RAM
+#define KERNEL_HEAP_SIZE (128 * 1024)  // 128KB for kernel
+#define EXTRAM_HEAP_SIZE (1024 * 1024) // 1MB for external RAM
+
+static char kernel_heap_buffer[KERNEL_HEAP_SIZE];
+static char extram_heap_buffer[EXTRAM_HEAP_SIZE];
+
+void multi_context_example(void) {
+    // Create separate contexts for different memory regions
+    dmheap_context_t* kernel_ctx = dmheap_init(kernel_heap_buffer, KERNEL_HEAP_SIZE, 8);
+    dmheap_context_t* extram_ctx = dmheap_init(extram_heap_buffer, EXTRAM_HEAP_SIZE, 32);
+    
+    // Set kernel context as default (optional)
+    dmheap_set_default_context(kernel_ctx);
+    
+    // Allocate kernel data from kernel heap (NULL uses default)
+    void* kernel_data = dmheap_malloc(NULL, 1024, "kernel");
+    
+    // Allocate large buffers from external RAM (explicitly specify context)
+    void* large_buffer = dmheap_malloc(extram_ctx, 512 * 1024, "video");
+    
+    // Each context maintains its own free/used lists
+    // and can have different alignment requirements
+    
+    // Clean up
+    dmheap_free(NULL, kernel_data, false);           // Uses default (kernel_ctx)
+    dmheap_free(extram_ctx, large_buffer, false);    // Explicitly use extram_ctx
+}
+```
+
+**Benefits of Multiple Contexts:**
+- Separate memory pools for different purposes (kernel, external RAM, DMA buffers)
+- Different alignment requirements per context
+- Independent memory management and tracking
+- Isolation between different subsystems
 
 ### Aligned Allocation
 
@@ -287,7 +334,7 @@ void module_example(void) {
 
 void aligned_example(void) {
     // Allocate 1KB with 64-byte alignment (for DMA, SIMD, etc.)
-    void* aligned_buffer = dmheap_aligned_alloc(64, 1024, "dma_module");
+    void* aligned_buffer = dmheap_aligned_alloc(NULL, 64, 1024, "dma_module");
     
     // Verify alignment
     assert((uintptr_t)aligned_buffer % 64 == 0);
@@ -295,7 +342,7 @@ void aligned_example(void) {
     // Use the buffer...
     
     // Free when done
-    dmheap_free(aligned_buffer, true);  // true = concatenate free blocks
+    dmheap_free(NULL, aligned_buffer, true);  // true = concatenate free blocks
 }
 ```
 
@@ -306,18 +353,18 @@ void aligned_example(void) {
 
 void realloc_example(void) {
     // Initial allocation
-    void* buffer = dmheap_malloc(100, "data_processor");
+    void* buffer = dmheap_malloc(NULL, 100, "data_processor");
     memcpy(buffer, "Hello", 6);
     
     // Need more space
-    buffer = dmheap_realloc(buffer, 200, "data_processor");
+    buffer = dmheap_realloc(NULL, buffer, 200, "data_processor");
     // Original data is preserved, now have 200 bytes
     
     // Need less space
-    buffer = dmheap_realloc(buffer, 50, "data_processor");
+    buffer = dmheap_realloc(NULL, buffer, 50, "data_processor");
     // Data preserved, memory reduced
     
-    dmheap_free(buffer, false);
+    dmheap_free(NULL, buffer, false);
 }
 ```
 
@@ -328,18 +375,18 @@ void realloc_example(void) {
 
 void fragmentation_example(void) {
     // Allocate and free in a pattern that creates fragmentation
-    void* a = dmheap_malloc(100, "test");
-    void* b = dmheap_malloc(100, "test");
-    void* c = dmheap_malloc(100, "test");
+    void* a = dmheap_malloc(NULL, 100, "test");
+    void* b = dmheap_malloc(NULL, 100, "test");
+    void* c = dmheap_malloc(NULL, 100, "test");
     
-    dmheap_free(b, false);  // Creates a hole in the middle
+    dmheap_free(NULL, b, false);  // Creates a hole in the middle
     
     // Manually concatenate all free blocks to reduce fragmentation
-    dmheap_concatenate_free_blocks();
+    dmheap_concatenate_free_blocks(NULL);
     
     // Or use concatenate parameter when freeing
-    dmheap_free(a, true);  // Automatically tries to merge with adjacent free blocks
-    dmheap_free(c, true);
+    dmheap_free(NULL, a, true);  // Automatically tries to merge with adjacent free blocks
+    dmheap_free(NULL, c, true);
 }
 ```
 
@@ -391,7 +438,7 @@ static char system_heap[SYSTEM_HEAP_SIZE];
 
 // Simulated sensor module
 void sensor_module_init(void) {
-    dmheap_register_module("sensor");
+    dmheap_register_module(NULL, "sensor");
     
     // Allocate sensor data buffer
     typedef struct {
@@ -400,7 +447,7 @@ void sensor_module_init(void) {
         uint32_t timestamp;
     } sensor_data_t;
     
-    sensor_data_t* data = dmheap_malloc(sizeof(sensor_data_t), "sensor");
+    sensor_data_t* data = dmheap_malloc(NULL, sizeof(sensor_data_t), "sensor");
     if (data != NULL) {
         data->temperature = 25.5f;
         data->humidity = 60.0f;
@@ -413,20 +460,20 @@ void sensor_module_init(void) {
 
 void sensor_module_cleanup(void) {
     // Automatically frees all sensor module allocations
-    dmheap_unregister_module("sensor");
+    dmheap_unregister_module(NULL, "sensor");
     printf("Sensor module cleaned up\n");
 }
 
 // Simulated network module
 void network_module_init(void) {
-    dmheap_register_module("network");
+    dmheap_register_module(NULL, "network");
     
     // Allocate network buffers (need DMA alignment)
     #define NUM_NET_BUFFERS 10
     #define NET_BUFFER_SIZE 1500  // MTU size
     
     for (int i = 0; i < NUM_NET_BUFFERS; i++) {
-        void* buffer = dmheap_aligned_alloc(64, NET_BUFFER_SIZE, "network");
+        void* buffer = dmheap_aligned_alloc(NULL, 64, NET_BUFFER_SIZE, "network");
         if (buffer == NULL) {
             printf("Failed to allocate network buffer %d\n", i);
             break;
@@ -439,7 +486,7 @@ void network_module_init(void) {
 
 void network_module_cleanup(void) {
     // Automatically frees all network module allocations
-    dmheap_unregister_module("network");
+    dmheap_unregister_module(NULL, "network");
     printf("Network module cleaned up\n");
 }
 
@@ -447,10 +494,12 @@ int main(void) {
     printf("=== Embedded System with dmheap ===\n\n");
     
     // Initialize heap for the entire system
-    if (!dmheap_init(system_heap, SYSTEM_HEAP_SIZE, 8)) {
+    dmheap_context_t* ctx = dmheap_init(system_heap, SYSTEM_HEAP_SIZE, 8);
+    if (ctx == NULL) {
         printf("ERROR: Failed to initialize heap\n");
         return -1;
     }
+    dmheap_set_default_context(ctx);  // Set as default for NULL context calls
     printf("Heap initialized: %d KB\n\n", SYSTEM_HEAP_SIZE / 1024);
     
     // Initialize modules
@@ -523,26 +572,52 @@ All modules cleaned up successfully!
 #### `dmheap_init`
 
 ```c
-bool dmheap_init(void* buffer, size_t size, size_t alignment);
+dmheap_context_t* dmheap_init(void* buffer, size_t size, size_t alignment);
 ```
 
-Initialize the heap with a given buffer and size.
+Initialize the heap with a given buffer and size. The context structure is stored at the beginning of the provided buffer.
 
 - **Parameters:**
   - `buffer`: Pointer to the memory buffer to be used as heap
-  - `size`: Size of the memory buffer in bytes
+  - `size`: Size of the memory buffer in bytes (must be large enough for context + data)
   - `alignment`: Default alignment for allocations (must be power of 2)
-- **Returns:** `true` if initialization is successful, `false` otherwise
+- **Returns:** Pointer to the heap context, or `NULL` if initialization fails
+- **Thread-safe:** Yes
+- **Note:** The first initialized context automatically becomes the default context
+
+#### `dmheap_set_default_context`
+
+```c
+void dmheap_set_default_context(dmheap_context_t* ctx);
+```
+
+Set the default heap context to use when `NULL` is passed to API functions.
+
+- **Parameters:**
+  - `ctx`: Pointer to the heap context to set as default
+- **Thread-safe:** Yes
+
+#### `dmheap_get_default_context`
+
+```c
+dmheap_context_t* dmheap_get_default_context(void);
+```
+
+Get the default heap context.
+
+- **Returns:** Pointer to the default heap context, or `NULL` if not set
 - **Thread-safe:** Yes
 
 #### `dmheap_is_initialized`
 
 ```c
-bool dmheap_is_initialized(void);
+bool dmheap_is_initialized(dmheap_context_t* ctx);
 ```
 
-Check if the heap is initialized.
+Check if the heap context is initialized.
 
+- **Parameters:**
+  - `ctx`: Pointer to the heap context (`NULL` to use default context)
 - **Returns:** `true` if initialized, `false` otherwise
 - **Thread-safe:** Yes
 
@@ -551,12 +626,13 @@ Check if the heap is initialized.
 #### `dmheap_register_module`
 
 ```c
-bool dmheap_register_module(const char* module_name);
+bool dmheap_register_module(dmheap_context_t* ctx, const char* module_name);
 ```
 
 Register a module with the heap for memory tracking.
 
 - **Parameters:**
+  - `ctx`: Pointer to the heap context (`NULL` to use default context)
   - `module_name`: Name of the module to register (max length: `DMOD_MAX_MODULE_NAME_LENGTH`)
 - **Returns:** `true` if registration is successful, `false` otherwise
 - **Thread-safe:** Yes
@@ -564,12 +640,13 @@ Register a module with the heap for memory tracking.
 #### `dmheap_unregister_module`
 
 ```c
-void dmheap_unregister_module(const char* module_name);
+void dmheap_unregister_module(dmheap_context_t* ctx, const char* module_name);
 ```
 
 Unregister a module from the heap and automatically free all its allocations.
 
 - **Parameters:**
+  - `ctx`: Pointer to the heap context (`NULL` to use default context)
   - `module_name`: Name of the module to unregister
 - **Thread-safe:** Yes
 - **Note:** This automatically frees ALL memory allocated by this module
@@ -579,12 +656,13 @@ Unregister a module from the heap and automatically free all its allocations.
 #### `dmheap_malloc`
 
 ```c
-void* dmheap_malloc(size_t size, const char* module_name);
+void* dmheap_malloc(dmheap_context_t* ctx, size_t size, const char* module_name);
 ```
 
 Allocate memory from the heap.
 
 - **Parameters:**
+  - `ctx`: Pointer to the heap context (`NULL` to use default context)
   - `size`: Size of memory to allocate in bytes
   - `module_name`: Name of the module requesting allocation (for tracking, can be NULL)
 - **Returns:** Pointer to the allocated memory, or NULL if allocation fails
@@ -594,12 +672,13 @@ Allocate memory from the heap.
 #### `dmheap_aligned_alloc`
 
 ```c
-void* dmheap_aligned_alloc(size_t alignment, size_t size, const char* module_name);
+void* dmheap_aligned_alloc(dmheap_context_t* ctx, size_t alignment, size_t size, const char* module_name);
 ```
 
 Allocate aligned memory from the heap.
 
 - **Parameters:**
+  - `ctx`: Pointer to the heap context (`NULL` to use default context)
   - `alignment`: Alignment requirement (must be power of 2)
   - `size`: Size of memory to allocate in bytes
   - `module_name`: Name of the module requesting allocation (for tracking, can be NULL)
@@ -610,12 +689,13 @@ Allocate aligned memory from the heap.
 #### `dmheap_realloc`
 
 ```c
-void* dmheap_realloc(void* ptr, size_t size, const char* module_name);
+void* dmheap_realloc(dmheap_context_t* ctx, void* ptr, size_t size, const char* module_name);
 ```
 
 Reallocate memory from the heap.
 
 - **Parameters:**
+  - `ctx`: Pointer to the heap context (`NULL` to use default context)
   - `ptr`: Pointer to previously allocated memory (can be NULL)
   - `size`: New size of memory to allocate in bytes
   - `module_name`: Name of the module requesting reallocation (for logging)
@@ -630,12 +710,13 @@ Reallocate memory from the heap.
 #### `dmheap_free`
 
 ```c
-void dmheap_free(void* ptr, bool concatenate);
+void dmheap_free(dmheap_context_t* ctx, void* ptr, bool concatenate);
 ```
 
 Free memory back to the heap.
 
 - **Parameters:**
+  - `ctx`: Pointer to the heap context (`NULL` to use default context)
   - `ptr`: Pointer to the memory to free
   - `concatenate`: If `true`, attempt to merge adjacent free blocks to reduce fragmentation
 - **Thread-safe:** Yes
@@ -646,11 +727,13 @@ Free memory back to the heap.
 #### `dmheap_concatenate_free_blocks`
 
 ```c
-void dmheap_concatenate_free_blocks(void);
+void dmheap_concatenate_free_blocks(dmheap_context_t* ctx);
 ```
 
 Manually concatenate all adjacent free blocks in the heap to reduce fragmentation.
 
+- **Parameters:**
+  - `ctx`: Pointer to the heap context (`NULL` to use default context)
 - **Thread-safe:** Yes
 - **Use case:** Call periodically or when you need to allocate large contiguous blocks
 

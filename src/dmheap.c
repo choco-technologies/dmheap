@@ -26,7 +26,7 @@ typedef struct block_t
 /**
  * @brief Structure to hold the context of the heap.
  */
-typedef struct 
+typedef struct dmheap_context_t
 {
     void*  heap_start;      //!< Pointer to the start of the heap memory.
     size_t heap_size;       //!< Size of the heap memory.
@@ -34,9 +34,21 @@ typedef struct
     block_t* used_list;     //!< Pointer to the list of used memory blocks.
     size_t alignment;       //!< Alignment for allocations.
     module_t* module_list; //!< Pointer to the list of registered modules.
-} context_t;
+} dmheap_context_t;
 
-context_t g_dmheap_context = { NULL, 0 };
+static dmheap_context_t* g_default_context = NULL;
+
+/**
+ * @brief Get the context to use (either provided or default).
+ * 
+ * @param ctx Pointer to the heap context (NULL to use default context).
+ * 
+ * @return Pointer to the context to use, or NULL if no context is available.
+ */
+static dmheap_context_t* get_context( dmheap_context_t* ctx )
+{
+    return ctx != NULL ? ctx : g_default_context;
+}
 
 /**
  * @brief Align a pointer to the specified alignment.
@@ -101,12 +113,13 @@ static block_t* create_block( void* address, size_t size )
 /**
  * @brief Split a memory block into two if it's larger than the requested size.
  * 
+ * @param ctx   Pointer to the heap context.
  * @param block Pointer to the block to be split.
  * @param size  Size of the first block after splitting.
  * 
  * @return Pointer to the new block created after splitting, or NULL if not split.
  */
-static block_t* split_block( block_t* block, size_t size )
+static block_t* split_block( dmheap_context_t* ctx, block_t* block, size_t size )
 {
     if( block->size < size + sizeof(block_t) + 1 )
     {
@@ -114,7 +127,7 @@ static block_t* split_block( block_t* block, size_t size )
     }
 
     // Align the size to ensure the new block starts at an aligned address
-    size_t aligned_size = align_size( size, g_dmheap_context.alignment );
+    size_t aligned_size = align_size( size, ctx->alignment );
     
     // Make sure we still have enough space after alignment
     if( block->size < aligned_size + sizeof(block_t) + 1 )
@@ -209,14 +222,15 @@ static void add_block( block_t** list_head, block_t* block_to_add )
 /**
  * @brief Find a suitable free block for allocation.
  * 
+ * @param ctx       Pointer to the heap context.
  * @param size      Size of memory to allocate.
  * @param alignment Alignment requirement.
  * 
  * @return Pointer to the suitable block, or NULL if none found.
  */
-static block_t* find_suitable_block( size_t size, size_t alignment )
+static block_t* find_suitable_block( dmheap_context_t* ctx, size_t size, size_t alignment )
 {
-    block_t* current = g_dmheap_context.free_list;
+    block_t* current = ctx->free_list;
     while( current != NULL )
     {
         void* aligned_address = align_pointer( current->address, alignment );
@@ -238,13 +252,14 @@ static block_t* find_suitable_block( size_t size, size_t alignment )
 /**
  * @brief Find a block by its address in the used list.
  * 
+ * @param ctx     Pointer to the heap context.
  * @param address Pointer to the memory address.
  * 
  * @return Pointer to the block_t structure, or NULL if not found.
  */
-static block_t* find_block_by_address( void* address )
+static block_t* find_block_by_address( dmheap_context_t* ctx, void* address )
 {
-    block_t* current = g_dmheap_context.used_list;
+    block_t* current = ctx->used_list;
     while( current != NULL )
     {
         if( current->address == address )
@@ -276,13 +291,14 @@ static void add_module_to_list( module_t** list_head, module_t* module )
 /**
  * @brief Find a module by its name.
  * 
+ * @param ctx  Pointer to the heap context.
  * @param name Name of the module.
  * 
  * @return Pointer to the module_t structure, or NULL if not found.
  */
-static module_t* find_module_by_name( const char* name )
+static module_t* find_module_by_name( dmheap_context_t* ctx, const char* name )
 {
-    module_t* current = g_dmheap_context.module_list;
+    module_t* current = ctx->module_list;
     while( current != NULL )
     {
         if( strncmp( current->name, name, DMOD_MAX_MODULE_NAME_LENGTH ) == 0 )
@@ -328,50 +344,52 @@ static void remove_module_from_list( module_t** list_head, module_t* module_to_r
 /**
  * @brief Allocate aligned memory from the heap.
  * 
- * @param alignment Alignment requirement.
- * @param size      Size of memory to allocate.
+ * @param ctx         Pointer to the heap context.
+ * @param alignment   Alignment requirement.
+ * @param size        Size of memory to allocate.
  * @param module_name Name of the module requesting allocation (for logging).
  * 
  * @return Pointer to the allocated memory, or NULL if allocation fails.
  */
-static module_t* create_module( const char* name )
+static module_t* create_module( dmheap_context_t* ctx, const char* name )
 {
-    block_t* block = find_suitable_block( sizeof(module_t), g_dmheap_context.alignment );
+    block_t* block = find_suitable_block( ctx, sizeof(module_t), ctx->alignment );
     if( block == NULL )
     {
         DMOD_LOG_ERROR("dmheap: Unable to allocate memory for module %s.\n", name);
         return NULL;
     }
-    remove_block( &g_dmheap_context.free_list, block );
-    if(block->size > (sizeof(module_t) + sizeof(block_t) + g_dmheap_context.alignment))
+    remove_block( &ctx->free_list, block );
+    if(block->size > (sizeof(module_t) + sizeof(block_t) + ctx->alignment))
     {
-        block_t* new_block = split_block( block, sizeof(module_t) );
+        block_t* new_block = split_block( ctx, block, sizeof(module_t) );
         if( new_block != NULL )
         {
-            add_block( &g_dmheap_context.free_list, new_block );
+            add_block( &ctx->free_list, new_block );
         }
     }
     module_t* module = (module_t*)block->address;
     strncpy( module->name, name, DMOD_MAX_MODULE_NAME_LENGTH - 1 );
     module->name[DMOD_MAX_MODULE_NAME_LENGTH - 1] = '\0';
-    add_block( &g_dmheap_context.used_list, block );
-    add_module_to_list( &g_dmheap_context.module_list, module );
+    add_block( &ctx->used_list, block );
+    add_module_to_list( &ctx->module_list, module );
     return module;
 }
 
 /**
  * @brief Release all memory allocated by a specific module.
  * 
+ * @param ctx    Pointer to the heap context.
  * @param module Pointer to the module whose memory is to be released.
  */
-static void release_memory_of_module( module_t* module )
+static void release_memory_of_module( dmheap_context_t* ctx, module_t* module )
 {
     if( module == NULL )
     {
         return;
     }
 
-    block_t* current = g_dmheap_context.used_list;
+    block_t* current = ctx->used_list;
     block_t* prev = NULL;
 
     while( current != NULL )
@@ -381,15 +399,15 @@ static void release_memory_of_module( module_t* module )
             block_t* to_free = current;
             if( prev == NULL )
             {
-                g_dmheap_context.used_list = current->next;
-                current = g_dmheap_context.used_list;
+                ctx->used_list = current->next;
+                current = ctx->used_list;
             }
             else
             {
                 block_set_next(prev, current->next);
                 current = prev->next;
             }
-            add_block( &g_dmheap_context.free_list, to_free );
+            add_block( &ctx->free_list, to_free );
         }
         else
         {
@@ -402,79 +420,131 @@ static void release_memory_of_module( module_t* module )
 /**
  * @brief Delete a registered module and free its memory.
  * 
+ * @param ctx    Pointer to the heap context.
  * @param module Pointer to the module to be deleted.
  */
-static void delete_module( module_t* module )
+static void delete_module( dmheap_context_t* ctx, module_t* module )
 {
     if( module == NULL )
     {
         return;
     }
 
-    release_memory_of_module( module );
-    remove_module_from_list( &g_dmheap_context.module_list, module );
+    release_memory_of_module( ctx, module );
+    remove_module_from_list( &ctx->module_list, module );
 
-    block_t* block = find_block_by_address( (void*)module );
+    block_t* block = find_block_by_address( ctx, (void*)module );
     if( block != NULL )
     {
-        remove_block( &g_dmheap_context.used_list, block );
-        add_block( &g_dmheap_context.free_list, block );
+        remove_block( &ctx->used_list, block );
+        add_block( &ctx->free_list, block );
     }
 }
 
 /**
  * @brief Get or create a module by its name.
  * 
+ * @param ctx         Pointer to the heap context.
  * @param module_name Name of the module.
  * 
  * @return Pointer to the module_t structure.
  */
-static module_t* get_or_create_module( const char* module_name )
+static module_t* get_or_create_module( dmheap_context_t* ctx, const char* module_name )
 {
-    module_t* module = find_module_by_name( module_name );
+    module_t* module = find_module_by_name( ctx, module_name );
     if( module == NULL )
     {
-        module = create_module( module_name );
+        module = create_module( ctx, module_name );
     }
     return module;
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _init, ( void* buffer, size_t size, size_t alignment ) )
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buffer, size_t size, size_t alignment ) )
 {
     if(buffer == NULL || size == 0)
     {
         DMOD_LOG_ERROR("dmheap: _init called with invalid parameters.\n");
-        return false;
+        return NULL;
     }
+    
+    // Check buffer alignment for context structure
+    if(((uintptr_t)buffer % sizeof(void*)) != 0)
+    {
+        DMOD_LOG_ERROR("dmheap: buffer is not properly aligned (must be aligned to pointer size).\n");
+        return NULL;
+    }
+    
+    // The context structure is stored at the beginning of the buffer
+    // Align context size to ensure heap starts at a proper boundary
+    size_t context_size = align_size(sizeof(dmheap_context_t), alignment > sizeof(void*) ? alignment : sizeof(void*));
+    if(size < context_size + sizeof(block_t) + alignment)
+    {
+        DMOD_LOG_ERROR("dmheap: buffer too small for context and minimum allocation.\n");
+        return NULL;
+    }
+    
     Dmod_EnterCritical();
-    g_dmheap_context.heap_start = buffer;
-    g_dmheap_context.heap_size  = size;
-    g_dmheap_context.free_list  = create_block( buffer, size );
-    g_dmheap_context.used_list  = NULL;
-    g_dmheap_context.alignment  = alignment;
-    g_dmheap_context.module_list = NULL;  // Reset module list on initialization
+    dmheap_context_t* ctx = (dmheap_context_t*)buffer;
+    
+    // Calculate the start of the heap (after the aligned context structure)
+    void* heap_buffer = (void*)((uintptr_t)buffer + context_size);
+    size_t heap_size = size - context_size;
+    
+    ctx->heap_start = heap_buffer;
+    ctx->heap_size  = heap_size;
+    ctx->free_list  = create_block( heap_buffer, heap_size );
+    ctx->used_list  = NULL;
+    ctx->alignment  = alignment;
+    ctx->module_list = NULL;  // Reset module list on initialization
+    
+    // Set as default context if none exists
+    if(g_default_context == NULL)
+    {
+        g_default_context = ctx;
+    }
+    
     Dmod_ExitCritical();
     DMOD_LOG_INFO("== dmheap ver. %s ==\n", DMHEAP_VERSION);
-    DMOD_LOG_INFO("dmheap: Initialized with buffer %p of size %lu.\n", buffer, (unsigned long)size);
-    return true;
+    DMOD_LOG_INFO("dmheap: Initialized with buffer %p of size %lu.\n", heap_buffer, (unsigned long)heap_size);
+    return ctx;
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _is_initialized, ( void ) )
-{
-    return g_dmheap_context.heap_start != NULL;
-}
-
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _register_module, ( const char* module_name ) )
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _set_default_context, ( dmheap_context_t* ctx ) )
 {
     Dmod_EnterCritical();
-    module_t* module = find_module_by_name( module_name );
+    g_default_context = ctx;
+    Dmod_ExitCritical();
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _get_default_context, ( void ) )
+{
+    return g_default_context;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _is_initialized, ( dmheap_context_t* ctx ) )
+{
+    ctx = get_context( ctx );
+    return ctx != NULL && ctx->heap_start != NULL;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _register_module, ( dmheap_context_t* ctx, const char* module_name ) )
+{
+    ctx = get_context( ctx );
+    if( ctx == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for register_module.\n");
+        return false;
+    }
+    
+    Dmod_EnterCritical();
+    module_t* module = find_module_by_name( ctx, module_name );
     if( module != NULL )
     {
         Dmod_ExitCritical();
         DMOD_LOG_WARN("dmheap: Module %s is already registered.\n", module_name);
         return true;
     }
-    module = create_module( module_name );
+    module = create_module( ctx, module_name );
     Dmod_ExitCritical();
     if( module == NULL )
     {
@@ -485,40 +555,60 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _register_module, ( const char* 
     return true;
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _unregister_module, ( const char* module_name ) )
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _unregister_module, ( dmheap_context_t* ctx, const char* module_name ) )
 {
+    ctx = get_context( ctx );
+    if( ctx == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for unregister_module.\n");
+        return;
+    }
+    
     // it is very likely, that module_name is inside a buffer we will free, so we need to copy it first
     char module_name_copy[DMOD_MAX_MODULE_NAME_LENGTH];
     strncpy( module_name_copy, module_name, DMOD_MAX_MODULE_NAME_LENGTH - 1 );
     module_name_copy[DMOD_MAX_MODULE_NAME_LENGTH - 1] = '\0';
 
     Dmod_EnterCritical();
-    module_t* module = find_module_by_name( module_name_copy );
+    module_t* module = find_module_by_name( ctx, module_name_copy );
     if( module == NULL )
     {
         Dmod_ExitCritical();
         DMOD_LOG_WARN("dmheap: Module %s is not registered.\n", module_name_copy);
         return;
     }
-    delete_module( module );
+    delete_module( ctx, module );
     Dmod_ExitCritical();
     DMOD_LOG_INFO("dmheap: Module %s unregistered successfully.\n", module_name_copy);
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _malloc, ( size_t size, const char* module_name ) )
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _malloc, ( dmheap_context_t* ctx, size_t size, const char* module_name ) )
 {
-    return dmheap_aligned_alloc( g_dmheap_context.alignment, size, module_name );
+    ctx = get_context( ctx );
+    if( ctx == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for malloc.\n");
+        return NULL;
+    }
+    return dmheap_aligned_alloc( ctx, ctx->alignment, size, module_name );
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _realloc, ( void* ptr, size_t size, const char* module_name) )
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _realloc, ( dmheap_context_t* ctx, void* ptr, size_t size, const char* module_name) )
 {
+    ctx = get_context( ctx );
+    if( ctx == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for realloc.\n");
+        return NULL;
+    }
+    
     if( ptr == NULL )
     {
-        return dmheap_aligned_alloc( g_dmheap_context.alignment, size, module_name );
+        return dmheap_aligned_alloc( ctx, ctx->alignment, size, module_name );
     }
 
     Dmod_EnterCritical();
-    block_t* block = find_block_by_address( ptr );
+    block_t* block = find_block_by_address( ctx, ptr );
     if( block == NULL )
     {
         Dmod_ExitCritical();
@@ -529,23 +619,23 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _realloc, ( void* ptr, size_t si
     void* new_ptr = NULL;
     if(size < block->size)
     {
-        remove_block( &g_dmheap_context.used_list, block );
-        block_t* new_block = split_block( block, size );
+        remove_block( &ctx->used_list, block );
+        block_t* new_block = split_block( ctx, block, size );
         if( new_block != NULL )
         {
-            add_block( &g_dmheap_context.free_list, new_block );
+            add_block( &ctx->free_list, new_block );
         }
-        add_block( &g_dmheap_context.used_list, block );
+        add_block( &ctx->used_list, block );
         new_ptr = ptr;
     }
     else if(size > block->size)
     {
-        new_ptr = dmheap_aligned_alloc( g_dmheap_context.alignment, size, module_name );
+        new_ptr = dmheap_aligned_alloc( ctx, ctx->alignment, size, module_name );
         if( new_ptr != NULL )
         {
             memcpy( new_ptr, ptr, block->size );
-            remove_block( &g_dmheap_context.used_list, block );
-            add_block( &g_dmheap_context.free_list, block );
+            remove_block( &ctx->used_list, block );
+            add_block( &ctx->free_list, block );
         }
     }
     else
@@ -557,15 +647,22 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _realloc, ( void* ptr, size_t si
     return new_ptr;
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _free, ( void* ptr, bool concatenate ) )
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _free, ( dmheap_context_t* ctx, void* ptr, bool concatenate ) )
 {
     if( ptr == NULL )
     {
         return;
     }
+    
+    ctx = get_context( ctx );
+    if( ctx == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for free.\n");
+        return;
+    }
 
     Dmod_EnterCritical();
-    block_t* block = find_block_by_address( ptr );
+    block_t* block = find_block_by_address( ctx, ptr );
     if( block == NULL )
     {
         Dmod_ExitCritical();
@@ -573,13 +670,13 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _free, ( void* ptr, bool concate
         return;
     }
 
-    remove_block( &g_dmheap_context.used_list, block );
-    add_block( &g_dmheap_context.free_list, block );
+    remove_block( &ctx->used_list, block );
+    add_block( &ctx->free_list, block );
 
     if(concatenate)
     {
         // Attempt to merge with adjacent free blocks
-        block_t* current = g_dmheap_context.free_list;
+        block_t* current = ctx->free_list;
         while( current != NULL )
         {
             if( current != block )
@@ -594,11 +691,18 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _free, ( void* ptr, bool concate
     Dmod_ExitCritical();
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignment, size_t size, const char* module_name) )
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context_t* ctx, size_t alignment, size_t size, const char* module_name) )
 {
+    ctx = get_context( ctx );
+    if( ctx == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for aligned_alloc.\n");
+        return NULL;
+    }
+    
     Dmod_EnterCritical();
     size_t aligned_size = align_size( size, alignment );
-    block_t* block = find_suitable_block( aligned_size, alignment );
+    block_t* block = find_suitable_block( ctx, aligned_size, alignment );
     if( block == NULL )
     {
         Dmod_ExitCritical();
@@ -610,7 +714,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignme
     size_t padding = (size_t)((uintptr_t)aligned_address - (uintptr_t)block->address);
 
     // First remove the block from free_list before splitting
-    remove_block( &g_dmheap_context.free_list, block );
+    remove_block( &ctx->free_list, block );
 
     // If there's any padding, we need to handle it
     if( padding > 0 )
@@ -624,11 +728,11 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignme
             size_t split_at = padding - sizeof(block_t);
             
             // Create a new block for the usable part
-            block_t* usable_block = split_block( block, split_at );
+            block_t* usable_block = split_block( ctx, block, split_at );
             if( usable_block != NULL )
             {
                 // block now contains the padding area, add it to free list
-                add_block( &g_dmheap_context.free_list, block );
+                add_block( &ctx->free_list, block );
                 // usable_block is what we'll actually use for allocation
                 block = usable_block;
                 // The usable_block's data (block->address) should now be at aligned_address
@@ -636,7 +740,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignme
             else
             {
                 // If split failed, put the block back to free_list
-                add_block( &g_dmheap_context.free_list, block );
+                add_block( &ctx->free_list, block );
                 // If we are here, something went wrong, 
                 // because find_suitable_block should have ensured enough space
                 // for splitting if padding was needed.
@@ -662,17 +766,17 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignme
             {
                 // Split at the position before the next aligned address
                 size_t split_at = new_padding - sizeof(block_t);
-                block_t* usable_block = split_block( block, split_at );
+                block_t* usable_block = split_block( ctx, block, split_at );
                 if( usable_block != NULL )
                 {
-                    add_block( &g_dmheap_context.free_list, block );
+                    add_block( &ctx->free_list, block );
                     block = usable_block;
                     aligned_address = block->address;  // Update aligned_address to the actual position
                 }
                 else
                 {
                     // Can't split, return the block to free list and fail
-                    add_block( &g_dmheap_context.free_list, block );
+                    add_block( &ctx->free_list, block );
                     Dmod_ExitCritical();
                     DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s - insufficient padding.\n", size, alignment, module_name);
                     return NULL;
@@ -681,7 +785,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignme
             else
             {
                 // Not enough space, return the block and fail
-                add_block( &g_dmheap_context.free_list, block );
+                add_block( &ctx->free_list, block );
                 Dmod_ExitCritical();
                 DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s - insufficient space.\n", size, alignment, module_name);
                 return NULL;
@@ -691,26 +795,33 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( size_t alignme
 
     if(block->size > aligned_size + sizeof(block_t) + 1)
     {
-        block_t* new_block = split_block( block, aligned_size );
+        block_t* new_block = split_block( ctx, block, aligned_size );
         if( new_block != NULL )
         {
-            add_block( &g_dmheap_context.free_list, new_block );
+            add_block( &ctx->free_list, new_block );
         }
     }
 
-    module_t* module = module_name != NULL ? get_or_create_module( module_name ) : NULL;
+    module_t* module = module_name != NULL ? get_or_create_module( ctx, module_name ) : NULL;
     block->owner = module;
 
-    add_block( &g_dmheap_context.used_list, block );
+    add_block( &ctx->used_list, block );
 
     Dmod_ExitCritical();
     return aligned_address;
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _concatenate_free_blocks, ( void ) )
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _concatenate_free_blocks, ( dmheap_context_t* ctx ) )
 {
+    ctx = get_context( ctx );
+    if( ctx == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for concatenate_free_blocks.\n");
+        return;
+    }
+    
     Dmod_EnterCritical();
-    block_t* current = g_dmheap_context.free_list;
+    block_t* current = ctx->free_list;
     while( current != NULL )
     {
         block_t* next = current->next;
@@ -733,26 +844,26 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _concatenate_free_blocks, ( void
 #ifndef DMHEAP_DONT_IMPLEMENT_DMOD_API
 DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void*, _MallocEx, ( size_t Size, const char* ModuleName ))
 {
-    return dmheap_aligned_alloc( g_dmheap_context.alignment, Size, ModuleName );
+    return dmheap_malloc( NULL, Size, ModuleName );
 }
 
 DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void*, _ReallocEx, ( void* Ptr, size_t Size, const char* ModuleName ))
 {
-    return dmheap_realloc( Ptr, Size, ModuleName );
+    return dmheap_realloc( NULL, Ptr, Size, ModuleName );
 }
 
 DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void*, _AlignedMallocEx, ( size_t Size, size_t Alignment, const char* ModuleName ))
 {
-    return dmheap_aligned_alloc( Alignment, Size, ModuleName );
+    return dmheap_aligned_alloc( NULL, Alignment, Size, ModuleName );
 }
 
 DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void , _FreeEx, ( void* Ptr, bool Concatenate ))
 {
-    dmheap_free( Ptr, Concatenate );
+    dmheap_free( NULL, Ptr, Concatenate );
 }
 
 DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void, _FreeModule, ( const char* ModuleName ))
 {
-    dmheap_unregister_module( ModuleName );
+    dmheap_unregister_module( NULL, ModuleName );
 }
 #endif // DMHEAP_DONT_IMPLEMENT_DMOD_API

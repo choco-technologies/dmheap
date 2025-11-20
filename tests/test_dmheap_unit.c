@@ -15,7 +15,8 @@ static char test_heap[TEST_HEAP_SIZE];
 // Helper function to reset heap for each test
 static void reset_heap(void) {
     memset(test_heap, 0, TEST_HEAP_SIZE);
-    dmheap_init(test_heap, TEST_HEAP_SIZE, 8);
+    dmheap_context_t* ctx = dmheap_init(test_heap, TEST_HEAP_SIZE, 8);
+    dmheap_set_default_context(ctx);
 }
 
 // Test: Initialization
@@ -24,17 +25,17 @@ static void test_init(void) {
     
     // Test with valid parameters
     char heap[1024];
-    bool result = dmheap_init(heap, 1024, 8);
-    ASSERT_TEST(result == true, "Init with valid parameters");
-    ASSERT_TEST(dmheap_is_initialized() == true, "Heap is initialized after init");
+    dmheap_context_t* ctx = dmheap_init(heap, 1024, 8);
+    ASSERT_TEST(ctx != NULL, "Init with valid parameters");
+    ASSERT_TEST(dmheap_is_initialized(ctx) == true, "Heap is initialized after init");
     
     // Test with NULL buffer
-    result = dmheap_init(NULL, 1024, 8);
-    ASSERT_TEST(result == false, "Init with NULL buffer should fail");
+    ctx = dmheap_init(NULL, 1024, 8);
+    ASSERT_TEST(ctx == NULL, "Init with NULL buffer should fail");
     
     // Test with zero size
-    result = dmheap_init(heap, 0, 8);
-    ASSERT_TEST(result == false, "Init with zero size should fail");
+    ctx = dmheap_init(heap, 0, 8);
+    ASSERT_TEST(ctx == NULL, "Init with zero size should fail");
 }
 
 // Test: Module registration
@@ -43,23 +44,23 @@ static void test_module_registration(void) {
     reset_heap();
     
     // Register a module
-    bool result = dmheap_register_module("test_module");
+    bool result = dmheap_register_module(NULL, "test_module");
     ASSERT_TEST(result == true, "Register module successfully");
     
     // Register same module again (should succeed but warn)
-    result = dmheap_register_module("test_module");
+    result = dmheap_register_module(NULL, "test_module");
     ASSERT_TEST(result == true, "Re-register same module");
     
     // Register another module
-    result = dmheap_register_module("module2");
+    result = dmheap_register_module(NULL, "module2");
     ASSERT_TEST(result == true, "Register second module");
     
     // Unregister module
-    dmheap_unregister_module("test_module");
+    dmheap_unregister_module(NULL, "test_module");
     printf("[INFO] Module unregistered\n");
     
     // Unregister non-existent module (should just warn)
-    dmheap_unregister_module("non_existent");
+    dmheap_unregister_module(NULL, "non_existent");
     printf("[INFO] Unregister non-existent module\n");
 }
 
@@ -69,11 +70,11 @@ static void test_basic_allocation(void) {
     reset_heap();
     
     // Allocate small block
-    void* ptr1 = dmheap_malloc(64, "test_module");
+    void* ptr1 = dmheap_malloc(NULL, 64, "test_module");
     ASSERT_TEST(ptr1 != NULL, "Allocate 64 bytes");
     
     // Allocate another block
-    void* ptr2 = dmheap_malloc(128, "test_module");
+    void* ptr2 = dmheap_malloc(NULL, 128, "test_module");
     ASSERT_TEST(ptr2 != NULL, "Allocate 128 bytes");
     ASSERT_TEST(ptr1 != ptr2, "Different pointers for different allocations");
     
@@ -84,8 +85,8 @@ static void test_basic_allocation(void) {
     ASSERT_TEST(((unsigned char*)ptr2)[0] == 0xBB, "Write to second allocation");
     
     // Free allocations
-    dmheap_free(ptr1, false);
-    dmheap_free(ptr2, false);
+    dmheap_free(NULL, ptr1, false);
+    dmheap_free(NULL, ptr2, false);
     printf("[INFO] Memory freed\n");
 }
 
@@ -95,23 +96,23 @@ static void test_aligned_allocation(void) {
     reset_heap();
     
     // Test 16-byte alignment
-    void* ptr1 = dmheap_aligned_alloc(16, 64, "test_module");
+    void* ptr1 = dmheap_aligned_alloc(NULL, 16, 64, "test_module");
     ASSERT_TEST(ptr1 != NULL, "Allocate with 16-byte alignment");
     ASSERT_TEST(((uintptr_t)ptr1 % 16) == 0, "Pointer is 16-byte aligned");
     
     // Test 32-byte alignment
-    void* ptr2 = dmheap_aligned_alloc(32, 128, "test_module");
+    void* ptr2 = dmheap_aligned_alloc(NULL, 32, 128, "test_module");
     ASSERT_TEST(ptr2 != NULL, "Allocate with 32-byte alignment");
     ASSERT_TEST(((uintptr_t)ptr2 % 32) == 0, "Pointer is 32-byte aligned");
     
     // Test 64-byte alignment
-    void* ptr3 = dmheap_aligned_alloc(64, 256, "test_module");
+    void* ptr3 = dmheap_aligned_alloc(NULL, 64, 256, "test_module");
     ASSERT_TEST(ptr3 != NULL, "Allocate with 64-byte alignment");
     ASSERT_TEST(((uintptr_t)ptr3 % 64) == 0, "Pointer is 64-byte aligned");
     
-    dmheap_free(ptr1, false);
-    dmheap_free(ptr2, false);
-    dmheap_free(ptr3, false);
+    dmheap_free(NULL, ptr1, false);
+    dmheap_free(NULL, ptr2, false);
+    dmheap_free(NULL, ptr3, false);
 }
 
 // Test: Aligned allocation with padding (regression test for bug fix)
@@ -124,7 +125,7 @@ static void test_aligned_allocation_with_padding(void) {
     // structure instead of the data area after splitting for alignment padding.
     
     // Test 1: Allocate with alignment that will likely require padding
-    void* ptr1 = dmheap_aligned_alloc(64, 128, "test_module");
+    void* ptr1 = dmheap_aligned_alloc(NULL, 64, 128, "test_module");
     ASSERT_TEST(ptr1 != NULL, "Allocate with 64-byte alignment");
     ASSERT_TEST(((uintptr_t)ptr1 % 64) == 0, "Pointer is 64-byte aligned");
     
@@ -134,19 +135,19 @@ static void test_aligned_allocation_with_padding(void) {
     ASSERT_TEST(((unsigned char*)ptr1)[127] == 0xAA, "Full buffer is writable");
     
     // Allocate a second block to verify the used_list is intact
-    void* ptr2 = dmheap_malloc(64, "test_module");
+    void* ptr2 = dmheap_malloc(NULL, 64, "test_module");
     ASSERT_TEST(ptr2 != NULL, "Second allocation succeeds (list not corrupted)");
     
     // Free the first allocation - if bug exists and corrupted used_list, this will crash
-    dmheap_free(ptr1, false);
+    dmheap_free(NULL, ptr1, false);
     printf("[INFO] First free succeeded (used_list intact)\n");
     
     // Free second allocation
-    dmheap_free(ptr2, false);
+    dmheap_free(NULL, ptr2, false);
     printf("[INFO] Second free succeeded\n");
     
     // Test 2: Larger alignment to force more padding
-    void* ptr3 = dmheap_aligned_alloc(256, 512, "test_module");
+    void* ptr3 = dmheap_aligned_alloc(NULL, 256, 512, "test_module");
     ASSERT_TEST(ptr3 != NULL, "Allocate with 256-byte alignment");
     ASSERT_TEST(((uintptr_t)ptr3 % 256) == 0, "Pointer is 256-byte aligned");
     
@@ -155,12 +156,12 @@ static void test_aligned_allocation_with_padding(void) {
     ASSERT_TEST(((unsigned char*)ptr3)[0] == 0xBB, "Write to large aligned allocation");
     
     // Allocate another block to verify list integrity
-    void* ptr4 = dmheap_malloc(32, "test_module");
+    void* ptr4 = dmheap_malloc(NULL, 32, "test_module");
     ASSERT_TEST(ptr4 != NULL, "Allocation after large aligned alloc succeeds");
     
     // Free both
-    dmheap_free(ptr3, false);
-    dmheap_free(ptr4, false);
+    dmheap_free(NULL, ptr3, false);
+    dmheap_free(NULL, ptr4, false);
     printf("[INFO] All allocations freed successfully\n");
 }
 
@@ -170,27 +171,27 @@ static void test_reallocation(void) {
     reset_heap();
     
     // Initial allocation
-    void* ptr = dmheap_malloc(64, "test_module");
+    void* ptr = dmheap_malloc(NULL, 64, "test_module");
     ASSERT_TEST(ptr != NULL, "Initial allocation");
     
     // Write some data
     memset(ptr, 0xCC, 64);
     
     // Realloc to larger size
-    void* new_ptr = dmheap_realloc(ptr, 128, "test_module");
+    void* new_ptr = dmheap_realloc(NULL, ptr, 128, "test_module");
     ASSERT_TEST(new_ptr != NULL, "Realloc to larger size");
     ASSERT_TEST(((unsigned char*)new_ptr)[0] == 0xCC, "Data preserved after realloc");
     
     // Realloc to smaller size
-    void* smaller_ptr = dmheap_realloc(new_ptr, 32, "test_module");
+    void* smaller_ptr = dmheap_realloc(NULL, new_ptr, 32, "test_module");
     ASSERT_TEST(smaller_ptr != NULL, "Realloc to smaller size");
     
     // Realloc NULL pointer (should work like malloc)
-    void* null_realloc = dmheap_realloc(NULL, 64, "test_module");
+    void* null_realloc = dmheap_realloc(NULL, NULL, 64, "test_module");
     ASSERT_TEST(null_realloc != NULL, "Realloc NULL pointer");
     
-    dmheap_free(smaller_ptr, false);
-    dmheap_free(null_realloc, false);
+    dmheap_free(NULL, smaller_ptr, false);
+    dmheap_free(NULL, null_realloc, false);
 }
 
 // Test: Free and concatenate
@@ -199,34 +200,34 @@ static void test_free_and_concatenate(void) {
     reset_heap();
     
     // Allocate a few blocks
-    void* ptr1 = dmheap_malloc(64, "test_module");
-    void* ptr2 = dmheap_malloc(64, "test_module");
-    void* ptr3 = dmheap_malloc(64, "test_module");
+    void* ptr1 = dmheap_malloc(NULL, 64, "test_module");
+    void* ptr2 = dmheap_malloc(NULL, 64, "test_module");
+    void* ptr3 = dmheap_malloc(NULL, 64, "test_module");
     
     ASSERT_TEST(ptr1 != NULL && ptr2 != NULL && ptr3 != NULL, "Allocate three blocks");
     
     // Free middle block
-    dmheap_free(ptr2, false);
+    dmheap_free(NULL, ptr2, false);
     printf("[INFO] Freed middle block\n");
     
     // Free first block with concatenation
-    dmheap_free(ptr1, true);
+    dmheap_free(NULL, ptr1, true);
     printf("[INFO] Freed first block with concatenation\n");
     
     // Free last block with concatenation
-    dmheap_free(ptr3, true);
+    dmheap_free(NULL, ptr3, true);
     printf("[INFO] Freed last block with concatenation\n");
     
     // Test concatenate_free_blocks function with small number of blocks
-    void* a1 = dmheap_malloc(128, "test");
-    void* a2 = dmheap_malloc(128, "test");
-    void* a3 = dmheap_malloc(128, "test");
+    void* a1 = dmheap_malloc(NULL, 128, "test");
+    void* a2 = dmheap_malloc(NULL, 128, "test");
+    void* a3 = dmheap_malloc(NULL, 128, "test");
     
-    if (a1) dmheap_free(a1, false);
-    if (a2) dmheap_free(a2, false);
-    if (a3) dmheap_free(a3, false);
+    if (a1) dmheap_free(NULL, a1, false);
+    if (a2) dmheap_free(NULL, a2, false);
+    if (a3) dmheap_free(NULL, a3, false);
     
-    dmheap_concatenate_free_blocks();
+    dmheap_concatenate_free_blocks(NULL);
     printf("[INFO] Called concatenate_free_blocks\n");
 }
 
@@ -236,19 +237,19 @@ static void test_large_allocation(void) {
     reset_heap();
     
     // Allocate large block (most of the heap)
-    void* large_ptr = dmheap_malloc(TEST_HEAP_SIZE / 2, "test_module");
+    void* large_ptr = dmheap_malloc(NULL, TEST_HEAP_SIZE / 2, "test_module");
     ASSERT_TEST(large_ptr != NULL, "Allocate large block (half heap)");
     
     // Try to allocate another large block (should fail)
-    void* too_large = dmheap_malloc(TEST_HEAP_SIZE / 2, "test_module");
+    void* too_large = dmheap_malloc(NULL, TEST_HEAP_SIZE / 2, "test_module");
     ASSERT_TEST(too_large == NULL, "Fail to allocate when heap full");
     
     // Free and reallocate
-    dmheap_free(large_ptr, true);
-    large_ptr = dmheap_malloc(TEST_HEAP_SIZE / 4, "test_module");
+    dmheap_free(NULL, large_ptr, true);
+    large_ptr = dmheap_malloc(NULL, TEST_HEAP_SIZE / 4, "test_module");
     ASSERT_TEST(large_ptr != NULL, "Allocate after freeing");
     
-    dmheap_free(large_ptr, false);
+    dmheap_free(NULL, large_ptr, false);
 }
 
 // Test: Stress test with many allocations
@@ -262,7 +263,7 @@ static void test_stress_allocations(void) {
     
     // Allocate many small blocks
     for (int i = 0; i < NUM_ALLOCS; i++) {
-        ptrs[i] = dmheap_malloc(64, "test_module");
+        ptrs[i] = dmheap_malloc(NULL, 64, "test_module");
         if (ptrs[i] != NULL) {
             successful_allocs++;
             // Write to verify allocation
@@ -276,12 +277,12 @@ static void test_stress_allocations(void) {
     // Free all allocations
     for (int i = 0; i < NUM_ALLOCS; i++) {
         if (ptrs[i] != NULL) {
-            dmheap_free(ptrs[i], false);
+            dmheap_free(NULL, ptrs[i], false);
         }
     }
     
     // Concatenate all free blocks
-    dmheap_concatenate_free_blocks();
+    dmheap_concatenate_free_blocks(NULL);
     printf("[INFO] Concatenated free blocks\n");
 }
 
@@ -291,26 +292,26 @@ static void test_module_cleanup(void) {
     reset_heap();
     
     // Register and allocate for module1
-    dmheap_register_module("module1");
-    void* ptr1 = dmheap_malloc(128, "module1");
-    void* ptr2 = dmheap_malloc(256, "module1");
+    dmheap_register_module(NULL, "module1");
+    void* ptr1 = dmheap_malloc(NULL, 128, "module1");
+    void* ptr2 = dmheap_malloc(NULL, 256, "module1");
     ASSERT_TEST(ptr1 != NULL && ptr2 != NULL, "Allocate for module1");
     
     // Register and allocate for module2
-    dmheap_register_module("module2");
-    void* ptr3 = dmheap_malloc(128, "module2");
+    dmheap_register_module(NULL, "module2");
+    void* ptr3 = dmheap_malloc(NULL, 128, "module2");
     ASSERT_TEST(ptr3 != NULL, "Allocate for module2");
     
     // Unregister module1 (should free its allocations)
-    dmheap_unregister_module("module1");
+    dmheap_unregister_module(NULL, "module1");
     printf("[INFO] Unregistered module1 (should free its allocations)\n");
     
     // Module2's allocation should still be valid
     memset(ptr3, 0xDD, 128);
     ASSERT_TEST(((unsigned char*)ptr3)[0] == 0xDD, "Module2 allocation still valid");
     
-    dmheap_free(ptr3, false);
-    dmheap_unregister_module("module2");
+    dmheap_free(NULL, ptr3, false);
+    dmheap_unregister_module(NULL, "module2");
 }
 
 // Test: Edge cases
@@ -319,21 +320,21 @@ static void test_edge_cases(void) {
     reset_heap();
     
     // Free NULL pointer (should not crash)
-    dmheap_free(NULL, false);
+    dmheap_free(NULL, NULL, false);
     printf("[INFO] Free NULL pointer (no crash)\n");
     
     // Allocate zero bytes
-    void* zero_alloc = dmheap_malloc(0, "test_module");
+    void* zero_alloc = dmheap_malloc(NULL, 0, "test_module");
     printf("[INFO] Allocate 0 bytes: %p\n", zero_alloc);
     if (zero_alloc != NULL) {
-        dmheap_free(zero_alloc, false);
+        dmheap_free(NULL, zero_alloc, false);
     }
     
     // Allocate with NULL module name
-    void* null_module = dmheap_malloc(64, NULL);
+    void* null_module = dmheap_malloc(NULL, 64, NULL);
     ASSERT_TEST(null_module != NULL, "Allocate with NULL module name");
     if (null_module != NULL) {
-        dmheap_free(null_module, false);
+        dmheap_free(NULL, null_module, false);
     }
     
     // Note: Double free test removed as it triggers assertion in block_set_next
@@ -350,28 +351,90 @@ static void test_fragmentation(void) {
     
     // Allocate 6 blocks
     for (int i = 0; i < 6; i++) {
-        ptrs[i] = dmheap_malloc(1024, "test");
+        ptrs[i] = dmheap_malloc(NULL, 1024, "test");
         ASSERT_TEST(ptrs[i] != NULL, "Allocated block in fragmentation test");
     }
     
     // Free every other block
     for (int i = 0; i < 6; i += 2) {
-        dmheap_free(ptrs[i], false);
+        dmheap_free(NULL, ptrs[i], false);
     }
     printf("[INFO] Freed every other block\n");
     
     // Try to allocate large block (should fail due to fragmentation)
-    void* large = dmheap_malloc(5000, "test");
+    void* large = dmheap_malloc(NULL, 5000, "test");
     printf("[INFO] Large allocation in fragmented heap: %p\n", large);
     
     // Note: We skip concatenation test here as it can be slow with fragmentation
     // Just clean up
     for (int i = 1; i < 6; i += 2) {
-        if (ptrs[i]) dmheap_free(ptrs[i], false);
+        if (ptrs[i]) dmheap_free(NULL, ptrs[i], false);
     }
     if (large != NULL) {
-        dmheap_free(large, false);
+        dmheap_free(NULL, large, false);
     }
+}
+
+// Test: Multiple independent contexts
+static void test_multiple_contexts(void) {
+    TEST_SECTION("Multiple Independent Contexts");
+    
+    // Create two separate heaps
+    #define CTX1_SIZE (64 * 1024)  // 64KB
+    #define CTX2_SIZE (128 * 1024) // 128KB
+    static char heap1[CTX1_SIZE];
+    static char heap2[CTX2_SIZE];
+    
+    // Initialize two independent contexts
+    dmheap_context_t* ctx1 = dmheap_init(heap1, CTX1_SIZE, 8);
+    dmheap_context_t* ctx2 = dmheap_init(heap2, CTX2_SIZE, 16); // Different alignment
+    
+    ASSERT_TEST(ctx1 != NULL, "Initialize first context");
+    ASSERT_TEST(ctx2 != NULL, "Initialize second context");
+    ASSERT_TEST(ctx1 != ctx2, "Contexts are different");
+    
+    // Allocate memory from both contexts
+    void* ptr1_from_ctx1 = dmheap_malloc(ctx1, 1024, "module1");
+    void* ptr2_from_ctx1 = dmheap_malloc(ctx1, 2048, "module1");
+    void* ptr1_from_ctx2 = dmheap_malloc(ctx2, 4096, "module2");
+    void* ptr2_from_ctx2 = dmheap_malloc(ctx2, 8192, "module2");
+    
+    ASSERT_TEST(ptr1_from_ctx1 != NULL, "Allocate from context 1 (1)");
+    ASSERT_TEST(ptr2_from_ctx1 != NULL, "Allocate from context 1 (2)");
+    ASSERT_TEST(ptr1_from_ctx2 != NULL, "Allocate from context 2 (1)");
+    ASSERT_TEST(ptr2_from_ctx2 != NULL, "Allocate from context 2 (2)");
+    
+    // Verify that allocations from different contexts have different addresses
+    ASSERT_TEST(ptr1_from_ctx1 != ptr1_from_ctx2, "Allocations from different contexts are different");
+    
+    // Write different patterns to each allocation
+    memset(ptr1_from_ctx1, 0xAA, 1024);
+    memset(ptr1_from_ctx2, 0xBB, 4096);
+    
+    // Verify patterns
+    ASSERT_TEST(((unsigned char*)ptr1_from_ctx1)[0] == 0xAA, "Context 1 data intact");
+    ASSERT_TEST(((unsigned char*)ptr1_from_ctx2)[0] == 0xBB, "Context 2 data intact");
+    
+    // Free memory from context 1
+    dmheap_free(ctx1, ptr1_from_ctx1, false);
+    dmheap_free(ctx1, ptr2_from_ctx1, false);
+    
+    // Verify context 2 allocations are still valid
+    ASSERT_TEST(((unsigned char*)ptr1_from_ctx2)[0] == 0xBB, "Context 2 data still intact after freeing context 1 data");
+    
+    // Free memory from context 2
+    dmheap_free(ctx2, ptr1_from_ctx2, false);
+    dmheap_free(ctx2, ptr2_from_ctx2, false);
+    
+    printf("[INFO] Successfully tested multiple independent contexts\n");
+    
+    // Test using default context
+    dmheap_set_default_context(ctx1);
+    void* ptr_default = dmheap_malloc(NULL, 512, "default_module");
+    ASSERT_TEST(ptr_default != NULL, "Allocate using default context");
+    dmheap_free(NULL, ptr_default, false);
+    
+    printf("[INFO] Successfully tested default context fallback\n");
 }
 
 // Performance benchmark
@@ -391,7 +454,7 @@ static void benchmark_allocations(void) {
     start = clock();
     int allocated_count = 0;
     for (int i = 0; i < iterations; i++) {
-        ptrs[i] = dmheap_malloc(64, "bench");
+        ptrs[i] = dmheap_malloc(NULL, 64, "bench");
         if (ptrs[i] == NULL) {
             TEST_INFO("Could only allocate %d/%d blocks", i, iterations);
             allocated_count = i;
@@ -408,7 +471,7 @@ static void benchmark_allocations(void) {
     start = clock();
     for (int i = 0; i < allocated_count; i++) {
         if (ptrs[i] != NULL) {
-            dmheap_free(ptrs[i], false);
+            dmheap_free(NULL, ptrs[i], false);
             ptrs[i] = NULL;
         }
     }
@@ -422,7 +485,7 @@ static void benchmark_allocations(void) {
     start = clock();
     allocated_count = 0;
     for (int i = 0; i < iterations; i++) {
-        ptrs[i] = dmheap_aligned_alloc(16, 64, "bench");
+        ptrs[i] = dmheap_aligned_alloc(NULL, 16, 64, "bench");
         if (ptrs[i] == NULL) {
             allocated_count = i;
             break;
@@ -437,7 +500,7 @@ static void benchmark_allocations(void) {
     // Free aligned blocks
     for (int i = 0; i < allocated_count; i++) {
         if (ptrs[i] != NULL) {
-            dmheap_free(ptrs[i], false);
+            dmheap_free(NULL, ptrs[i], false);
             ptrs[i] = NULL;
         }
     }
@@ -448,7 +511,7 @@ static void benchmark_allocations(void) {
     void* ptr = NULL;
     int realloc_count = 0;
     for (int i = 0; i < iterations; i++) {
-        ptr = dmheap_realloc(ptr, 64 + (i % 128), "bench");
+        ptr = dmheap_realloc(NULL, ptr, 64 + (i % 128), "bench");
         if (ptr == NULL) {
             realloc_count = i;
             break;
@@ -461,7 +524,7 @@ static void benchmark_allocations(void) {
                realloc_count, cpu_time_used, cpu_time_used / realloc_count);
     
     if (ptr != NULL) {
-        dmheap_free(ptr, false);
+        dmheap_free(NULL, ptr, false);
     }
 }
 
@@ -483,6 +546,7 @@ int main(void) {
     test_module_cleanup();
     // test_edge_cases();  // TODO: Temporarily disabled - double free triggers assertion
     test_fragmentation();
+    test_multiple_contexts();
     benchmark_allocations();
     
     // Print summary

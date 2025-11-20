@@ -47,6 +47,10 @@ else()
     message(STATUS "dmod target already exists, skipping FetchContent")
 endif()
 
+# Include DMOD paths to ensure DMOD_SCRIPTS_DIR is set
+set(DMOD_PATHS "${DMOD_DIR}/paths.cmake")
+include(${DMOD_PATHS})
+
 # ======================================================================
 #               DMOD Heap Library
 # ======================================================================
