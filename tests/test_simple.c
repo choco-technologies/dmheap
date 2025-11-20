@@ -9,15 +9,15 @@ int main(void) {
     printf("=== Simple DMHEAP Test ===\n");
     
     // Test 1: Init
-    bool result = dmheap_init(test_heap, TEST_HEAP_SIZE, 8);
-    printf("Init: %s\n", result ? "PASS" : "FAIL");
+    dmheap_context_t* ctx = dmheap_init(test_heap, TEST_HEAP_SIZE, 8);
+    printf("Init: %s\n", ctx != NULL ? "PASS" : "FAIL");
     
     // Test 2: Is initialized
-    bool init_check = dmheap_is_initialized();
+    bool init_check = dmheap_is_initialized(ctx);
     printf("Is Initialized: %s\n", init_check ? "PASS" : "FAIL");
     
     // Test 3: Simple allocation
-    void* ptr = dmheap_malloc(256, "test");
+    void* ptr = dmheap_malloc(ctx, 256, "test");
     printf("Malloc: %s\n", ptr != NULL ? "PASS" : "FAIL");
     
     // Test 4: Write to memory
@@ -26,7 +26,7 @@ int main(void) {
         printf("Write: PASS\n");
         
         // Test 5: Free
-        dmheap_free(ptr, false);
+        dmheap_free(ctx, ptr, false);
         printf("Free: PASS\n");
     }
     
