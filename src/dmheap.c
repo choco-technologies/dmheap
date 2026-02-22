@@ -360,6 +360,7 @@ static module_t* create_module( dmheap_context_t* ctx, const char* name )
         return NULL;
     }
     remove_block( &ctx->free_list, block );
+    block->owner = NULL;
     if(block->size > (sizeof(module_t) + sizeof(block_t) + ctx->alignment))
     {
         block_t* new_block = split_block( ctx, block, sizeof(module_t) );
