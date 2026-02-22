@@ -314,6 +314,64 @@ static void test_module_cleanup(void) {
     dmheap_unregister_module(NULL, "module2");
 }
 
+// Test: Module re-registration with stale owner bug
+// Regression test for: crash in find_module_by_name due to corrupted next pointer
+// Root cause: create_module did not clear block->owner, causing release_memory_of_module
+// to incorrectly free a block whose stale owner matched the module being deleted.
+static void test_module_reregister_stale_owner(void) {
+    printf("\n=== Testing Module Re-registration (Stale Owner Regression) ===\n");
+    reset_heap();
+
+    // Step 1: Register "ls" and allocate - block will have owner=module_ls
+    dmheap_register_module(NULL, "ls");
+    void* ls_data = dmheap_malloc(NULL, 128, "ls");
+    ASSERT_TEST(ls_data != NULL, "Allocate for ls module");
+
+    // Step 2: Register a second module "cmd"
+    dmheap_register_module(NULL, "cmd");
+    void* cmd_data = dmheap_malloc(NULL, 64, "cmd");
+    ASSERT_TEST(cmd_data != NULL, "Allocate for cmd module");
+
+    // Step 3: Unregister "ls" - frees ls_data block; block still has stale owner=module_ls
+    dmheap_unregister_module(NULL, "ls");
+
+    // Step 4: Re-register "ls" - create_module may reuse the old module_ls block,
+    // making new module_ls2 at the same address as old module_ls.
+    dmheap_register_module(NULL, "ls");
+    void* ls_data2 = dmheap_malloc(NULL, 128, "ls");
+    ASSERT_TEST(ls_data2 != NULL, "Allocate for re-registered ls module");
+
+    // Step 5: Register "net" - create_module may pick up a block with stale owner.
+    // Without the fix, this block's owner would remain = old module_ls = new module_ls2,
+    // causing release_memory_of_module to free "net"'s module_t block when "ls" is deleted.
+    dmheap_register_module(NULL, "net");
+    void* net_data = dmheap_malloc(NULL, 32, "net");
+    ASSERT_TEST(net_data != NULL, "Allocate for net module");
+
+    // Step 6: Unregister "ls" again - without the fix, this would corrupt "net"'s module_t.
+    // With the fix, this should work correctly and not affect "net".
+    dmheap_free(NULL, ls_data2, false);
+    dmheap_unregister_module(NULL, "ls");
+    printf("[INFO] ls module unregistered (second time)\n");
+
+    // Step 7: "net" and "cmd" modules must still be usable - this would crash without the fix
+    // because "net"'s module_t block would be in free_list while still in module_list.
+    void* net_data2 = dmheap_malloc(NULL, 64, "net");
+    ASSERT_TEST(net_data2 != NULL, "net module still usable after ls unregistered");
+
+    memset(net_data, 0xEE, 32);
+    ASSERT_TEST(((unsigned char*)net_data)[0] == 0xEE, "net module data still valid");
+
+    // Step 8: Clean up
+    dmheap_free(NULL, net_data, false);
+    dmheap_free(NULL, net_data2, false);
+    dmheap_free(NULL, cmd_data, false);
+    dmheap_unregister_module(NULL, "net");
+    dmheap_unregister_module(NULL, "cmd");
+
+    printf("[INFO] Module re-registration stale owner test completed\n");
+}
+
 // Test: Edge cases
 static void test_edge_cases(void) {
     printf("\n=== Testing Edge Cases ===\n");
@@ -544,6 +602,7 @@ int main(void) {
     test_large_allocation();
     test_stress_allocations();
     test_module_cleanup();
+    test_module_reregister_stale_owner();
     // test_edge_cases();  // TODO: Temporarily disabled - double free triggers assertion
     test_fragmentation();
     test_multiple_contexts();
