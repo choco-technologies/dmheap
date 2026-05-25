@@ -575,7 +575,6 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _unregister_module, ( dmheap_con
     if( module == NULL )
     {
         Dmod_ExitCritical();
-        DMOD_LOG_WARN("dmheap: Module %s is not registered.\n", module_name_copy);
         return;
     }
     delete_module( ctx, module );
