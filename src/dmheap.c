@@ -159,7 +159,7 @@ static block_t* merge_blocks( block_t* first, block_t* second )
     {
         return NULL;
     }
-    if( (uintptr_t)first->address + first->size + sizeof(block_t) != (uintptr_t)second )
+    if( (uintptr_t)first->address + first->size != (uintptr_t)second )
     {
         return NULL;
     }
@@ -247,6 +247,37 @@ static block_t* find_suitable_block( dmheap_context_t* ctx, size_t size, size_t 
         current = current->next;
     }
     return NULL;
+}
+
+/**
+ * @brief Merge every pair of adjacent free blocks in the free list.
+ *
+ * Caller must already hold the heap's critical section - this is the core of
+ * _concatenate_free_blocks(), factored out so it can also be called from inside
+ * an allocation that is already holding the lock (see dmheap_aligned_alloc's
+ * retry-after-fragmentation path).
+ *
+ * @param ctx Pointer to the heap context.
+ */
+static void concatenate_free_blocks_locked( dmheap_context_t* ctx )
+{
+    block_t* current = ctx->free_list;
+    while( current != NULL )
+    {
+        block_t* next = current->next;
+        while( next != NULL )
+        {
+            if( merge_blocks( current, next ) != NULL )
+            {
+                next = current->next;
+            }
+            else
+            {
+                next = next->next;
+            }
+        }
+        current = current->next;
+    }
 }
 
 /**
@@ -705,6 +736,16 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context
     block_t* block = find_suitable_block( ctx, aligned_size, alignment );
     if( block == NULL )
     {
+        // Dmod_Free() never coalesces on its own (Concatenate=false) - a request can
+        // fail here purely from fragmentation even when the aggregate free memory is
+        // more than enough. Before giving up, try to merge adjacent free blocks and
+        // search once more - this only pays the O(n) coalescing cost on the rare
+        // allocation that actually needs it, instead of on every single free.
+        concatenate_free_blocks_locked( ctx );
+        block = find_suitable_block( ctx, aligned_size, alignment );
+    }
+    if( block == NULL )
+    {
         Dmod_ExitCritical();
         DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s.\n", size, alignment, module_name);
         return NULL;
@@ -821,23 +862,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _concatenate_free_blocks, ( dmhe
     }
     
     Dmod_EnterCritical();
-    block_t* current = ctx->free_list;
-    while( current != NULL )
-    {
-        block_t* next = current->next;
-        while( next != NULL )
-        {
-            if( merge_blocks( current, next ) != NULL )
-            {
-                next = current->next;
-            }
-            else
-            {
-                next = next->next;
-            }
-        }
-        current = current->next;
-    }
+    concatenate_free_blocks_locked( ctx );
     Dmod_ExitCritical();
 }
 
