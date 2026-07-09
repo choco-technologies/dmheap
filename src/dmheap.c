@@ -641,6 +641,11 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _unregister_module, ( dmheap_con
         return;
     }
     delete_module( ctx, module );
+    // Coalesce right away: a module's freed blocks otherwise sit as isolated,
+    // module-shaped fragments that a differently-sized/aligned future allocation
+    // can't reuse, permanently eating into the largest contiguous free region one
+    // load/unload cycle at a time (see Dmod_Context_Delete for the same reasoning).
+    concatenate_free_blocks_locked( ctx );
     Dmod_ExitCritical();
     DMOD_LOG_INFO("dmheap: Module %s unregistered successfully.\n", module_name_copy);
 }
