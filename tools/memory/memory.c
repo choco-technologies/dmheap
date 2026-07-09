@@ -103,6 +103,32 @@ static void module_summary_visitor( void* address, size_t size, const char* owne
     entry->total_bytes = size;
 }
 
+// Simple insertion sort (list is at most MAX_MODULE_SUMMARY_ENTRIES long, and this
+// avoids depending on a libc qsort that may not be available/linked for the target
+// architecture - see the same reasoning on the fragmentation histogram below).
+static void sort_module_summary( module_summary_t* summary )
+{
+    for( size_t i = 1; i < summary->count; i++ )
+    {
+        module_summary_entry_t key = summary->entries[i];
+        const char* key_name = key.is_null ? "(null)" : key.name;
+
+        size_t j = i;
+        while( j > 0 )
+        {
+            module_summary_entry_t* prev = &summary->entries[j - 1];
+            const char* prev_name = prev->is_null ? "(null)" : prev->name;
+            if( strcmp( prev_name, key_name ) <= 0 )
+            {
+                break;
+            }
+            summary->entries[j] = *prev;
+            j--;
+        }
+        summary->entries[j] = key;
+    }
+}
+
 static void print_modules( void )
 {
     module_summary_t* summary = Dmod_Malloc( sizeof(module_summary_t) );
@@ -114,6 +140,7 @@ static void print_modules( void )
     memset( summary, 0, sizeof(*summary) );
 
     dmheap_for_each_used_block( NULL, module_summary_visitor, summary );
+    sort_module_summary( summary );
 
     Dmod_Printf("Module allocation summary (%zu module%s):\n",
         summary->count, summary->count == 1 ? "" : "s");
