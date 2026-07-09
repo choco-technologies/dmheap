@@ -146,31 +146,6 @@ static block_t* split_block( dmheap_context_t* ctx, block_t* block, size_t size 
 }
 
 /**
- * @brief Merge two adjacent memory blocks into one.
- * 
- * @param first  Pointer to the first block.
- * @param second Pointer to the second block.
- * 
- * @return Pointer to the merged block, or NULL if not merged.
- */
-static block_t* merge_blocks( block_t* first, block_t* second )
-{
-    if( first == NULL || second == NULL )
-    {
-        return NULL;
-    }
-    if( (uintptr_t)first->address + first->size != (uintptr_t)second )
-    {
-        return NULL;
-    }
-
-    first->size += sizeof(block_t) + second->size;
-    block_set_next(first, second->next);
-
-    return first;
-}
-
-/**
  * @brief Remove a block from a linked list of blocks.
  * 
  * @param list_head Pointer to the head of the block list.
@@ -220,12 +195,47 @@ static void add_block( block_t** list_head, block_t* block_to_add )
 }
 
 /**
+ * @brief Insert a block into the free list, keeping it sorted from smallest to
+ * largest by size.
+ *
+ * This turns find_suitable_block()'s first-fit scan into a best-fit search - the
+ * first block it finds big enough is also the smallest one big enough - so large
+ * free blocks are kept intact for large requests instead of being handed out (and
+ * fragmented) for small ones.
+ *
+ * @param list_head Pointer to the head of the free block list.
+ * @param block_to_add Pointer to the block to be added.
+ */
+static void add_free_block( block_t** list_head, block_t* block_to_add )
+{
+    if( list_head == NULL || block_to_add == NULL )
+    {
+        return;
+    }
+
+    if( *list_head == NULL || block_to_add->size <= (*list_head)->size )
+    {
+        block_set_next(block_to_add, *list_head);
+        *list_head = block_to_add;
+        return;
+    }
+
+    block_t* current = *list_head;
+    while( current->next != NULL && current->next->size < block_to_add->size )
+    {
+        current = current->next;
+    }
+    block_set_next(block_to_add, current->next);
+    block_set_next(current, block_to_add);
+}
+
+/**
  * @brief Find a suitable free block for allocation.
- * 
+ *
  * @param ctx       Pointer to the heap context.
  * @param size      Size of memory to allocate.
  * @param alignment Alignment requirement.
- * 
+ *
  * @return Pointer to the suitable block, or NULL if none found.
  */
 static block_t* find_suitable_block( dmheap_context_t* ctx, size_t size, size_t alignment )
@@ -264,19 +274,41 @@ static void concatenate_free_blocks_locked( dmheap_context_t* ctx )
     block_t* current = ctx->free_list;
     while( current != NULL )
     {
+        // `next` scans ahead for any block physically adjacent to `current`, regardless
+        // of list order (the free list is not address-sorted). `prev` tracks next's real
+        // predecessor *in the list* so that, on a match, we unlink `next` from where it
+        // actually sits - not from current->next, which would silently drop every node
+        // in between from both the free and used lists (they'd become permanently
+        // unreachable, neither free nor allocated).
+        block_t* prev = current;
         block_t* next = current->next;
         while( next != NULL )
         {
-            if( merge_blocks( current, next ) != NULL )
+            if( (uintptr_t)current->address + current->size == (uintptr_t)next )
             {
-                next = current->next;
+                current->size += sizeof(block_t) + next->size;
+                block_set_next( prev, next->next );
+                next = prev->next;
             }
             else
             {
+                prev = next;
                 next = next->next;
             }
         }
         current = current->next;
+    }
+
+    // Merging grows blocks in place without moving them, so the free list (kept
+    // sorted smallest-to-largest by add_free_block()) is likely out of order now -
+    // rebuild it in sorted order.
+    block_t* unsorted = ctx->free_list;
+    ctx->free_list = NULL;
+    while( unsorted != NULL )
+    {
+        block_t* next = unsorted->next;
+        add_free_block( &ctx->free_list, unsorted );
+        unsorted = next;
     }
 }
 
@@ -397,7 +429,7 @@ static module_t* create_module( dmheap_context_t* ctx, const char* name )
         block_t* new_block = split_block( ctx, block, sizeof(module_t) );
         if( new_block != NULL )
         {
-            add_block( &ctx->free_list, new_block );
+            add_free_block( &ctx->free_list, new_block );
         }
     }
     module_t* module = (module_t*)block->address;
@@ -439,7 +471,7 @@ static void release_memory_of_module( dmheap_context_t* ctx, module_t* module )
                 block_set_next(prev, current->next);
                 current = prev->next;
             }
-            add_block( &ctx->free_list, to_free );
+            add_free_block( &ctx->free_list, to_free );
         }
         else
         {
@@ -469,7 +501,7 @@ static void delete_module( dmheap_context_t* ctx, module_t* module )
     if( block != NULL )
     {
         remove_block( &ctx->used_list, block );
-        add_block( &ctx->free_list, block );
+        add_free_block( &ctx->free_list, block );
     }
 }
 
@@ -654,7 +686,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _realloc, ( dmheap_context_t* ct
         block_t* new_block = split_block( ctx, block, size );
         if( new_block != NULL )
         {
-            add_block( &ctx->free_list, new_block );
+            add_free_block( &ctx->free_list, new_block );
         }
         add_block( &ctx->used_list, block );
         new_ptr = ptr;
@@ -666,7 +698,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _realloc, ( dmheap_context_t* ct
         {
             memcpy( new_ptr, ptr, block->size );
             remove_block( &ctx->used_list, block );
-            add_block( &ctx->free_list, block );
+            add_free_block( &ctx->free_list, block );
         }
     }
     else
@@ -702,21 +734,11 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _free, ( dmheap_context_t* ctx, 
     }
 
     remove_block( &ctx->used_list, block );
-    add_block( &ctx->free_list, block );
+    add_free_block( &ctx->free_list, block );
 
     if(concatenate)
     {
-        // Attempt to merge with adjacent free blocks
-        block_t* current = ctx->free_list;
-        while( current != NULL )
-        {
-            if( current != block )
-            {
-                merge_blocks( block, current );
-                merge_blocks( current, block );
-            }
-            current = current->next;
-        }
+        concatenate_free_blocks_locked( ctx );
     }
 
     Dmod_ExitCritical();
@@ -773,7 +795,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context
             if( usable_block != NULL )
             {
                 // block now contains the padding area, add it to free list
-                add_block( &ctx->free_list, block );
+                add_free_block( &ctx->free_list, block );
                 // usable_block is what we'll actually use for allocation
                 block = usable_block;
                 // The usable_block's data (block->address) should now be at aligned_address
@@ -781,7 +803,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context
             else
             {
                 // If split failed, put the block back to free_list
-                add_block( &ctx->free_list, block );
+                add_free_block( &ctx->free_list, block );
                 // If we are here, something went wrong, 
                 // because find_suitable_block should have ensured enough space
                 // for splitting if padding was needed.
@@ -810,14 +832,14 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context
                 block_t* usable_block = split_block( ctx, block, split_at );
                 if( usable_block != NULL )
                 {
-                    add_block( &ctx->free_list, block );
+                    add_free_block( &ctx->free_list, block );
                     block = usable_block;
                     aligned_address = block->address;  // Update aligned_address to the actual position
                 }
                 else
                 {
                     // Can't split, return the block to free list and fail
-                    add_block( &ctx->free_list, block );
+                    add_free_block( &ctx->free_list, block );
                     Dmod_ExitCritical();
                     DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s - insufficient padding.\n", size, alignment, module_name);
                     return NULL;
@@ -826,7 +848,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context
             else
             {
                 // Not enough space, return the block and fail
-                add_block( &ctx->free_list, block );
+                add_free_block( &ctx->free_list, block );
                 Dmod_ExitCritical();
                 DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s - insufficient space.\n", size, alignment, module_name);
                 return NULL;
@@ -839,7 +861,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context
         block_t* new_block = split_block( ctx, block, aligned_size );
         if( new_block != NULL )
         {
-            add_block( &ctx->free_list, new_block );
+            add_free_block( &ctx->free_list, new_block );
         }
     }
 
@@ -860,10 +882,46 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _concatenate_free_blocks, ( dmhe
         DMOD_LOG_ERROR("dmheap: No context available for concatenate_free_blocks.\n");
         return;
     }
-    
+
     Dmod_EnterCritical();
     concatenate_free_blocks_locked( ctx );
     Dmod_ExitCritical();
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool, _retag, ( dmheap_context_t* ctx, void* ptr, const char* new_module_name ) )
+{
+    ctx = get_context( ctx );
+    if( ctx == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for retag.\n");
+        return false;
+    }
+    if( ptr == NULL || new_module_name == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: retag called with invalid arguments.\n");
+        return false;
+    }
+
+    Dmod_EnterCritical();
+    block_t* block = find_block_by_address( ctx, ptr );
+    if( block == NULL )
+    {
+        Dmod_ExitCritical();
+        DMOD_LOG_ERROR("dmheap: retag called with unknown pointer %p.\n", ptr);
+        return false;
+    }
+
+    module_t* module = get_or_create_module( ctx, new_module_name );
+    if( module == NULL )
+    {
+        Dmod_ExitCritical();
+        DMOD_LOG_ERROR("dmheap: Unable to retag %p - failed to get/create module %s.\n", ptr, new_module_name);
+        return false;
+    }
+
+    block->owner = module;
+    Dmod_ExitCritical();
+    return true;
 }
 
 #ifndef DMHEAP_DONT_IMPLEMENT_DMOD_API
@@ -890,5 +948,10 @@ DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void , _FreeEx, ( void* Ptr, bool Concaten
 DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void, _FreeModule, ( const char* ModuleName ))
 {
     dmheap_unregister_module( NULL, ModuleName );
+}
+
+DMOD_INPUT_API_DECLARATION(Dmod, 1.0, bool, _RetagEx, ( void* Ptr, const char* ModuleName ))
+{
+    return dmheap_retag( NULL, Ptr, ModuleName );
 }
 #endif // DMHEAP_DONT_IMPLEMENT_DMOD_API

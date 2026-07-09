@@ -96,9 +96,26 @@ DMOD_BUILTIN_API( dmheap, 1.0, void             , _free, ( dmheap_context_t* ctx
 DMOD_BUILTIN_API( dmheap, 1.0, void*            , _aligned_alloc, ( dmheap_context_t* ctx, size_t alignment, size_t size, const char* module_name) );
 /**
  * @brief Concatenate all adjacent free blocks in the heap.
- * 
+ *
  * @param ctx Pointer to the heap context (NULL to use default context).
  */
 DMOD_BUILTIN_API( dmheap, 1.0, void             , _concatenate_free_blocks, ( dmheap_context_t* ctx ) );
+
+/**
+ * @brief Change the module a previously-allocated block is attributed to.
+ *
+ * For allocations whose true owner is only known after the fact (e.g. a decompression
+ * buffer allocated by generic kernel code before the caller has assigned it to a specific
+ * module instance). Looks the block up by its existing address - the pointer itself never
+ * changes, only which module's bucket it is tracked under. Creates the target module if it
+ * is not already registered.
+ *
+ * @param ctx           Pointer to the heap context (NULL to use default context).
+ * @param ptr           Pointer previously returned by _malloc/_aligned_alloc/_realloc.
+ * @param new_module_name Name of the module to attribute the block to from now on.
+ *
+ * @return true if the block was found and retagged, false otherwise.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, bool             , _retag, ( dmheap_context_t* ctx, void* ptr, const char* new_module_name ) );
 
 #endif // DMHEAP_H
