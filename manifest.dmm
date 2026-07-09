@@ -4,3 +4,7 @@ $include https://github.com/choco-technologies/dmheap/releases/download/vlatest/
 # Module entries with version placeholder - will be expanded by $version-available
 # dmheap is architecture-independent (headers only)
 dmheap https://github.com/choco-technologies/dmheap/releases/download/v<version>/dmheap-v<version>.zip
+
+# memory is a compiled Application module (tools/memory), so it is
+# architecture-dependent
+memory https://github.com/choco-technologies/dmheap/releases/download/v<version>/memory-v<version>-<arch_name>.zip

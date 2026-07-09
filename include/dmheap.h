@@ -118,4 +118,62 @@ DMOD_BUILTIN_API( dmheap, 1.0, void             , _concatenate_free_blocks, ( dm
  */
 DMOD_BUILTIN_API( dmheap, 1.0, bool             , _retag, ( dmheap_context_t* ctx, void* ptr, const char* new_module_name ) );
 
+/**
+ * @brief Aggregate statistics about the heap's current state.
+ */
+typedef struct dmheap_stats_t
+{
+    size_t heap_size;              //!< Total heap size (bytes), as passed to dmheap_init.
+    size_t free_bytes;             //!< Sum of usable (data) bytes across all free blocks.
+    size_t used_bytes;             //!< Sum of usable (data) bytes across all used blocks.
+    size_t free_block_count;       //!< Number of free blocks.
+    size_t used_block_count;       //!< Number of used blocks.
+    size_t largest_free_block;     //!< Size (bytes) of the largest free block, 0 if none.
+    size_t smallest_free_block;    //!< Size (bytes) of the smallest free block, 0 if none.
+} dmheap_stats_t;
+
+/**
+ * @brief Get aggregate statistics about the heap.
+ *
+ * @param ctx        Pointer to the heap context (NULL to use default context).
+ * @param out_stats  Filled in with the current heap statistics.
+ *
+ * @return true on success, false if no context is available or out_stats is NULL.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, bool             , _get_stats, ( dmheap_context_t* ctx, dmheap_stats_t* out_stats ) );
+
+/**
+ * @brief Callback invoked once per block by dmheap_for_each_free_block()/dmheap_for_each_used_block().
+ *
+ * Called while the heap's internal lock is held, so it must be fast and must not call back
+ * into dmheap (allocate/free/retag) or do blocking I/O (e.g. printing) - accumulate into a
+ * caller-owned buffer instead and do any slow work after the *_for_each_*_block() call
+ * returns.
+ *
+ * @param address     The block's data address (as returned by an allocation function).
+ * @param size        The block's usable data size in bytes.
+ * @param owner_name  Name of the module the block is attributed to, or NULL if untracked
+ *                     (always NULL for free blocks; NULL for used blocks with no known owner).
+ * @param user_data   Opaque pointer passed through from the *_for_each_*_block() call.
+ */
+typedef void (*dmheap_block_visitor_t)( void* address, size_t size, const char* owner_name, void* user_data );
+
+/**
+ * @brief Walk every free block in the heap, in no particular guaranteed order.
+ *
+ * @param ctx        Pointer to the heap context (NULL to use default context).
+ * @param visitor    Called once per free block (see dmheap_block_visitor_t).
+ * @param user_data  Passed through to each visitor call.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, void             , _for_each_free_block, ( dmheap_context_t* ctx, dmheap_block_visitor_t visitor, void* user_data ) );
+
+/**
+ * @brief Walk every used (allocated) block in the heap, in no particular guaranteed order.
+ *
+ * @param ctx        Pointer to the heap context (NULL to use default context).
+ * @param visitor    Called once per used block (see dmheap_block_visitor_t).
+ * @param user_data  Passed through to each visitor call.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, void             , _for_each_used_block, ( dmheap_context_t* ctx, dmheap_block_visitor_t visitor, void* user_data ) );
+
 #endif // DMHEAP_H

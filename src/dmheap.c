@@ -924,6 +924,76 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool, _retag, ( dmheap_context_t* ctx, 
     return true;
 }
 
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool, _get_stats, ( dmheap_context_t* ctx, dmheap_stats_t* out_stats ) )
+{
+    ctx = get_context( ctx );
+    if( ctx == NULL || out_stats == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: get_stats called with invalid arguments.\n");
+        return false;
+    }
+
+    memset( out_stats, 0, sizeof(*out_stats) );
+    out_stats->heap_size = ctx->heap_size;
+
+    Dmod_EnterCritical();
+
+    for( block_t* block = ctx->free_list; block != NULL; block = block->next )
+    {
+        out_stats->free_bytes += block->size;
+        out_stats->free_block_count++;
+        if( out_stats->largest_free_block == 0 || block->size > out_stats->largest_free_block )
+        {
+            out_stats->largest_free_block = block->size;
+        }
+        if( out_stats->smallest_free_block == 0 || block->size < out_stats->smallest_free_block )
+        {
+            out_stats->smallest_free_block = block->size;
+        }
+    }
+
+    for( block_t* block = ctx->used_list; block != NULL; block = block->next )
+    {
+        out_stats->used_bytes += block->size;
+        out_stats->used_block_count++;
+    }
+
+    Dmod_ExitCritical();
+    return true;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void, _for_each_free_block, ( dmheap_context_t* ctx, dmheap_block_visitor_t visitor, void* user_data ) )
+{
+    ctx = get_context( ctx );
+    if( ctx == NULL || visitor == NULL )
+    {
+        return;
+    }
+
+    Dmod_EnterCritical();
+    for( block_t* block = ctx->free_list; block != NULL; block = block->next )
+    {
+        visitor( block->address, block->size, NULL, user_data );
+    }
+    Dmod_ExitCritical();
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void, _for_each_used_block, ( dmheap_context_t* ctx, dmheap_block_visitor_t visitor, void* user_data ) )
+{
+    ctx = get_context( ctx );
+    if( ctx == NULL || visitor == NULL )
+    {
+        return;
+    }
+
+    Dmod_EnterCritical();
+    for( block_t* block = ctx->used_list; block != NULL; block = block->next )
+    {
+        visitor( block->address, block->size, block->owner != NULL ? block->owner->name : NULL, user_data );
+    }
+    Dmod_ExitCritical();
+}
+
 #ifndef DMHEAP_DONT_IMPLEMENT_DMOD_API
 DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void*, _MallocEx, ( size_t Size, const char* ModuleName ))
 {

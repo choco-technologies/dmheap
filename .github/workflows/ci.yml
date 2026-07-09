@@ -114,3 +114,23 @@ jobs:
         echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
         lcov --summary coverage_filtered.info 2>&1 | tee -a $GITHUB_STEP_SUMMARY
         echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  build-tools:
+    name: Build Tools (memory module)
+    runs-on: ubuntu-latest
+    container:
+      image: chocotechnologies/dmod:1.0.2
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Build memory module
+      run: |
+        cd tools/memory
+        mkdir -p build
+        cd build
+        cmake .. -DDMOD_MODE=DMOD_MODULE
+        cmake --build .

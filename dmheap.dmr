@@ -10,6 +10,9 @@ inc=./include => ${destination}/${module}/include
 # README file
 readme=./README.md => ${destination}/${module}/README.md
 
+# Module documentation in markdown format for the dmf-man tool
+docs=./docs => ${destination}/${module}/docs
+
 # === License ===
 # License file
 license=./LICENSE => ${destination}/${module}/LICENSE

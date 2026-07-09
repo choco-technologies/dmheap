@@ -38,17 +38,19 @@ jobs:
           # Copy header files
           mkdir -p release_package/include
           cp include/dmheap.h release_package/include/
-          
+
           # Copy documentation and license
+          cp -r docs release_package/docs
           cp README.md release_package/
           cp LICENSE release_package/
-          
+
           # Create release notes file from GitHub release
           echo "${{ github.event.release.body }}" > release_package/RELEASE_NOTES.txt
-          
+
           echo "Package contents:"
           ls -la release_package/
           ls -la release_package/include/
+          ls -la release_package/docs/
       
       - name: Create release archive
         run: |
@@ -64,6 +66,88 @@ jobs:
         with:
           name: release-package
           path: dmheap-${{ github.event.release.tag_name }}.zip
+          retention-days: 1
+
+  discover-architectures:
+    name: Discover Architectures
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: chocotechnologies/dmod:1.0.4
+    outputs:
+      architectures: ${{ steps.list-archs.outputs.architectures }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fetch dmod to discover architectures
+        run: |
+          mkdir -p tools/memory/build_discovery
+          cd tools/memory/build_discovery
+          cmake .. -DDMOD_MODE=DMOD_MODULE
+
+      - name: List available architectures
+        id: list-archs
+        run: |
+          DMOD_SRC_DIR=$(find tools/memory/build_discovery -path "*/_deps/dmod-src" -type d | head -1)
+
+          ARCHS=$(find ${DMOD_SRC_DIR}/configs/arch -name "tools-cfg.cmake" | \
+            sed "s|${DMOD_SRC_DIR}/configs/arch/||g" | \
+            sed 's|/tools-cfg.cmake||g' | \
+            jq -R -s -c 'split("\n") | map(select(length > 0))')
+
+          echo "Found architectures: $ARCHS"
+          echo "architectures=$ARCHS" >> $GITHUB_OUTPUT
+
+  build-memory-release:
+    name: Build memory for ${{ matrix.arch_name }}
+    needs: discover-architectures
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        arch_name: ${{ fromJson(needs.discover-architectures.outputs.architectures) }}
+
+    container:
+      image: chocotechnologies/dmod:1.0.4
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build memory module for ${{ matrix.arch_name }}
+        run: |
+          set -e
+          ARCH_DIR_NAME=$(echo "${{ matrix.arch_name }}" | sed 's|/|-|')
+          echo "ARCH_DIR_NAME=$ARCH_DIR_NAME" >> $GITHUB_ENV
+          echo "ARTIFACT_NAME=memory-release-$ARCH_DIR_NAME" >> $GITHUB_ENV
+
+          cd tools/memory
+          mkdir -p build_$ARCH_DIR_NAME
+          cd build_$ARCH_DIR_NAME
+
+          cmake .. -DDMOD_TOOLS_NAME=arch/${{ matrix.arch_name }} -DDMOD_MODULE_VERSION="${{ steps.get_version.outputs.version }}"
+          cmake --build .
+
+          # DMOD_DMR_PATH in CMakeLists.txt already produced a ready-to-publish
+          # package archive as part of the build - just rename it for release.
+          ls -la packages/
+          cp packages/memory.zip ../../../memory-${{ github.event.release.tag_name }}-$ARCH_DIR_NAME.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: memory-${{ github.event.release.tag_name }}-*.zip
           retention-days: 1
 
   generate-versions-manifest:
@@ -99,7 +183,10 @@ jobs:
           
           # Add $version-available directive for dmheap module
           echo "\$version-available dmheap $VERSIONS" >> versions.dmm
-          
+
+          # Add $version-available directive for the memory tool module
+          echo "\$version-available memory $VERSIONS" >> versions.dmm
+
           echo "Generated versions.dmm:"
           cat versions.dmm
       
@@ -115,22 +202,22 @@ jobs:
 
   upload-release-assets:
     name: Upload Release Assets
-    needs: [build-release, generate-versions-manifest]
+    needs: [build-release, build-memory-release, generate-versions-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-      
+
       - name: Display artifact structure
         run: |
           echo "Downloaded artifacts:"
           ls -lR artifacts/
-      
+
       - name: Upload release assets to versioned tag
         shell: bash
         env:
@@ -139,8 +226,8 @@ jobs:
           set -e
           # Upload all release archives to the GitHub release
           shopt -s nullglob
-          zip_files=(artifacts/release-package/*.zip)
-          
+          zip_files=(artifacts/release-package/*.zip artifacts/memory-release-*/*.zip)
+
           if [ ${#zip_files[@]} -eq 0 ]; then
             echo "Error: No artifacts found to upload"
             exit 1
@@ -201,8 +288,8 @@ jobs:
         run: |
           set -e
           shopt -s nullglob
-          zip_files=(artifacts/release-package/*.zip)
-          
+          zip_files=(artifacts/release-package/*.zip artifacts/memory-release-*/*.zip)
+
           for zip_file in "${zip_files[@]}"; do
             echo "Uploading $zip_file to vlatest..."
             gh release upload vlatest \

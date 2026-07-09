@@ -52,6 +52,18 @@ set(DMOD_PATHS "${DMOD_DIR}/paths.cmake")
 include(${DMOD_PATHS})
 
 # ======================================================================
+#               DMOD Heap Interface Library
+# ======================================================================
+# Header-only target for application modules that just need to call dmheap's
+# DMOD_BUILTIN_API functions (resolved at runtime against the kernel's own dmheap
+# instance) without linking a second copy of dmheap.c into their module binary.
+add_library(dmheap_if INTERFACE)
+target_include_directories(dmheap_if
+    INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+# ======================================================================
 #               DMOD Heap Library
 # ======================================================================
 set(MODULE_NAME dmheap)
@@ -86,3 +98,12 @@ if(DMHEAP_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+# ======================================================================
+#               Tools
+# ======================================================================
+# tools/memory is an Application-type DMOD module (needs dmod in DMOD_MODULE
+# mode) and is therefore built as its own standalone CMake project - see
+# tools/memory/CMakeLists.txt and its README.md - not as a subdirectory here,
+# since this project fetches dmod in DMOD_SYSTEM mode for the dmheap library
+# itself and the two modes can't coexist in one CMake configure.

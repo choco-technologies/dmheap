@@ -1,0 +1,29 @@
+# DMOD Resource File for memory
+# This file specifies where resources should be installed
+
+# === Core Module ===
+# Main module file - always installed
+dmf=./${module}.dmf => ${destination}/${module}.dmf [origin=${dmf_dir}/${module}.dmf]
+
+# Compressed module
+dmfc=./${module}.dmfc => ${destination}/${module}.dmfc [origin=${build_dir}/dmfc/${module}.dmfc]
+
+# Dependencies file (if exists)
+dmd=./${module}.dmd => ${destination}/${module}.dmd [origin=${dmf_dir}/${module}.dmd]
+
+# Version information
+version=./${module}_version.txt => ${destination}/${module}_version.txt [origin=${dmf_dir}/${module}_version.txt]
+
+# === Documentation ===
+# README file
+readme=./README.md => ${destination}/${module}/README.md [origin=${repo_dir}/README.md]
+
+# Module documentation in markdown format for the dmf-man tool
+docs=./docs => ${destination}/${module}/docs [origin=${repo_dir}/docs]
+
+# === License ===
+# License file (shared with the rest of the dmheap repository)
+license=./LICENSE => ${destination}/${module}/LICENSE [origin=${repo_dir}/../../LICENSE]
+
+# Adding itself
+dmr=./${module}.dmr => ${destination}/${module}/${module}.dmr [origin=${repo_dir}/${module}.dmr]
