@@ -1,0 +1,15 @@
+# DMOD Resource File for dmheap
+# This file specifies where resources should be installed
+# Note: dmheap is a built-in module, so no .dmf file is distributed
+
+# === Header Files ===
+# Include directory with dmheap.h header
+inc=./include => ${destination}/${module}/include
+
+# === Documentation ===
+# README file
+readme=./README.md => ${destination}/${module}/README.md
+
+# === License ===
+# License file
+license=./LICENSE => ${destination}/${module}/LICENSE

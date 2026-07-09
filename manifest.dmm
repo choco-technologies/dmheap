@@ -1,0 +1,6 @@
+# Include dynamically generated versions list from latest release
+$include https://github.com/choco-technologies/dmheap/releases/download/vlatest/versions.dmm
+
+# Module entries with version placeholder - will be expanded by $version-available
+# dmheap is architecture-independent (headers only)
+dmheap https://github.com/choco-technologies/dmheap/releases/download/v<version>/dmheap-v<version>.zip
