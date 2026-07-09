@@ -18,7 +18,7 @@ memory [options]
 
 | Option | Description |
 |---|---|
-| `-s`, `--stats` | Print overall heap statistics: total size, free space, block count (free/used), largest and smallest free block. |
+| `-s`, `--stats` | Print overall heap statistics: total size, free space, block count (free/used), largest and smallest free block, and a fragmentation percentage (`(Free - LargestFree) / Free * 100`, the share of free memory outside the single largest free block). |
 | `-m`, `--modules` | Print a summary of every module that has allocated memory, including untracked (`(null)`) allocations, with block count and total bytes per module. |
 | `-f`, `--fragmentation` | Print a histogram of free block sizes: for each distinct block size, how many blocks of that size exist and how many bytes they add up to. |
 | `-h`, `--help` | Show usage information. |

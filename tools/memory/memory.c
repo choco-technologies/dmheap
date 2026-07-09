@@ -35,6 +35,14 @@ static void print_stats( void )
 
     size_t total_block_count = stats.free_block_count + stats.used_block_count;
 
+    // Share of free memory that sits outside the single largest free block, i.e. how
+    // much of it is unusable for an allocation bigger than that block.
+    double fragmentation_percent = 0.0;
+    if( stats.free_bytes > 0 )
+    {
+        fragmentation_percent = ( (double)(stats.free_bytes - stats.largest_free_block) / (double)stats.free_bytes ) * 100.0;
+    }
+
     Dmod_Printf("Heap statistics:\n");
     Dmod_Printf("  Total size:     %zu bytes\n", stats.heap_size);
     Dmod_Printf("  Free:           %zu bytes\n", stats.free_bytes);
@@ -43,6 +51,7 @@ static void print_stats( void )
         total_block_count, stats.free_block_count, stats.used_block_count);
     Dmod_Printf("  Largest free:   %zu bytes\n", stats.largest_free_block);
     Dmod_Printf("  Smallest free:  %zu bytes\n", stats.smallest_free_block);
+    Dmod_Printf("  Fragmentation:  %.1f%%\n", fragmentation_percent);
 }
 
 // ============================================================================

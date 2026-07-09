@@ -17,7 +17,9 @@ memory [options]
 ## Options
 
 - `-s`, `--stats` - Print overall heap statistics: total size, free space,
-  block count (free/used), and the largest/smallest free block.
+  block count (free/used), the largest/smallest free block, and a
+  fragmentation percentage (share of free memory outside the largest free
+  block).
 - `-m`, `--modules` - Print a summary of every module that has allocated
   memory, including untracked (`(null)`) allocations, with block count and
   total bytes per module.
