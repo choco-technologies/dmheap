@@ -19,17 +19,71 @@ typedef struct dmheap_context_t dmheap_context_t;
  */
 DMOD_BUILTIN_API( dmheap, 1.0, dmheap_context_t*, _init, ( void* buffer, size_t size, size_t alignment ) );
 /**
- * @brief Set the default heap context to use when NULL is passed to API functions.
- * 
- * @param ctx Pointer to the heap context to set as default.
+ * @brief Replace the list of default heap contexts with a single entry.
+ *
+ * Used when NULL is passed as the context to API functions. This clears any
+ * previously added default heaps (see dmheap_add_default_context()) and, if
+ * ctx is non-NULL, makes it the sole default heap.
+ *
+ * @param ctx Pointer to the heap context to set as default, or NULL to clear
+ *            the default heap list entirely.
  */
 DMOD_BUILTIN_API( dmheap, 1.0, void             , _set_default_context, ( dmheap_context_t* ctx ) );
 /**
- * @brief Get the default heap context.
- * 
- * @return Pointer to the default heap context, or NULL if not set.
+ * @brief Add a heap to the list of default heap contexts.
+ *
+ * When NULL is passed as the context to an allocation function (dmheap_malloc,
+ * dmheap_aligned_alloc, dmheap_realloc, and the SAL Dmod_Malloc/Dmod_MallocEx/...
+ * wrappers), every heap in this list is tried in the order it was added until
+ * one satisfies the request. Pointer-based operations (dmheap_free,
+ * dmheap_retag, ...) with a NULL context search the list for the heap that
+ * actually owns the pointer. The first heap ever initialized via dmheap_init()
+ * is added automatically; call this to register additional heaps.
+ *
+ * @param ctx Pointer to the heap context to add. Adding the same context twice
+ *            is a no-op.
+ *
+ * @return true if the heap was added (or already present), false if ctx is
+ *         NULL or the default heap list is full.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, bool             , _add_default_context, ( dmheap_context_t* ctx ) );
+/**
+ * @brief Remove a heap from the default heap list, if present.
+ *
+ * Use this before tearing down a heap that was added to the default list
+ * (e.g. a driver/module being unloaded that owned its own heap) - otherwise
+ * a later NULL-context call (malloc, free, get_stats, ...) could try to walk
+ * a heap whose backing buffer no longer exists. Does not affect the heap
+ * itself; ctx can still be used directly afterward.
+ *
+ * @param ctx Pointer to the heap context to remove.
+ *
+ * @return true if ctx was found in the default heap list (and removed),
+ *         false otherwise.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, bool             , _remove_default_context, ( dmheap_context_t* ctx ) );
+/**
+ * @brief Get the primary default heap context.
+ *
+ * @return Pointer to the first heap in the default heap list, or NULL if the
+ *         list is empty.
  */
 DMOD_BUILTIN_API( dmheap, 1.0, dmheap_context_t*, _get_default_context, ( void ) );
+/**
+ * @brief Get the number of heaps currently in the default heap list.
+ *
+ * @return Number of default heaps.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, size_t           , _get_default_context_count, ( void ) );
+/**
+ * @brief Get a default heap by its position in the list.
+ *
+ * @param index Index into the default heap list, in the order heaps were added.
+ *
+ * @return Pointer to the heap context at that index, or NULL if index is out
+ *         of range.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, dmheap_context_t*, _get_default_context_at, ( size_t index ) );
 /**
  * @brief Check if the heap is initialized.
  * 

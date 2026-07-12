@@ -495,6 +495,65 @@ static void test_multiple_contexts(void) {
     printf("[INFO] Successfully tested default context fallback\n");
 }
 
+// Test: Default heap list (add/remove/count/at, NULL-context spillover)
+static void test_default_heap_list(void) {
+    TEST_SECTION("Default Heap List");
+    reset_heap(); // test_heap is now the sole default heap
+
+    #define EXTRA_HEAP_SIZE (4 * 1024)
+    static char extra_heap[EXTRA_HEAP_SIZE];
+    dmheap_context_t* extra = dmheap_init(extra_heap, EXTRA_HEAP_SIZE, 8);
+    ASSERT_TEST(extra != NULL, "Initialize extra heap");
+
+    // A second dmheap_init() must NOT join the default list on its own.
+    ASSERT_TEST(dmheap_get_default_context_count() == 1, "Default list still has one heap after second init");
+
+    ASSERT_TEST(dmheap_add_default_context(extra) == true, "Add extra heap to default list");
+    ASSERT_TEST(dmheap_get_default_context_count() == 2, "Default list now has two heaps");
+    ASSERT_TEST(dmheap_add_default_context(extra) == true, "Re-adding the same heap is a no-op success");
+    ASSERT_TEST(dmheap_get_default_context_count() == 2, "Default list still has two heaps after re-add");
+    ASSERT_TEST(dmheap_get_default_context_at(0) != NULL && dmheap_get_default_context_at(1) != NULL, "Both slots are populated");
+    ASSERT_TEST(dmheap_get_default_context_at(2) == NULL, "Out-of-range index returns NULL");
+
+    // Fill the primary default heap almost completely so a NULL-context malloc
+    // has to spill over into the extra heap.
+    dmheap_stats_t stats;
+    dmheap_get_stats(dmheap_get_default_context_at(0), &stats);
+    void* filler = dmheap_malloc(dmheap_get_default_context_at(0), stats.free_bytes - 256, "filler");
+    ASSERT_TEST(filler != NULL, "Fill primary default heap");
+
+    void* spilled = dmheap_malloc(NULL, 512, "spillover");
+    ASSERT_TEST(spilled != NULL, "NULL-context malloc spills into extra heap");
+
+    dmheap_stats_t extra_stats;
+    dmheap_get_stats(extra, &extra_stats);
+    ASSERT_TEST(extra_stats.used_bytes >= 512, "Spilled allocation actually landed in the extra heap");
+    size_t used_blocks_before_free = extra_stats.used_block_count;
+
+    // A NULL-context free must find it there too, without being told which heap it's in.
+    dmheap_free(NULL, spilled, false);
+    dmheap_get_stats(extra, &extra_stats);
+    // Only the data block goes away here - the "spillover" module's own bookkeeping
+    // block stays used until the module itself is unregistered.
+    ASSERT_TEST(extra_stats.used_block_count == used_blocks_before_free - 1, "NULL-context free located and freed the block in the extra heap");
+
+    // Simulate unloading the driver/module that owns the extra heap: remove it
+    // from the default list before it goes away.
+    ASSERT_TEST(dmheap_remove_default_context(extra) == true, "Remove extra heap from default list");
+    ASSERT_TEST(dmheap_get_default_context_count() == 1, "Default list back down to one heap");
+    ASSERT_TEST(dmheap_remove_default_context(extra) == false, "Removing an already-removed heap fails");
+
+    // Now a NULL-context malloc that only the extra heap could satisfy must fail,
+    // even though the extra heap itself is still perfectly usable directly.
+    void* should_fail = dmheap_malloc(NULL, 512, "post_removal");
+    ASSERT_TEST(should_fail == NULL, "NULL-context malloc no longer reaches the removed heap");
+    void* direct = dmheap_malloc(extra, 512, "post_removal_direct");
+    ASSERT_TEST(direct != NULL, "Removed heap is still usable via an explicit context");
+    dmheap_free(extra, direct, false);
+
+    TEST_INFO("Default heap list test completed");
+}
+
 // Performance benchmark
 static void benchmark_allocations(void) {
     TEST_SECTION("Performance Benchmark");
@@ -606,6 +665,7 @@ int main(void) {
     // test_edge_cases();  // TODO: Temporarily disabled - double free triggers assertion
     test_fragmentation();
     test_multiple_contexts();
+    test_default_heap_list();
     benchmark_allocations();
     
     // Print summary

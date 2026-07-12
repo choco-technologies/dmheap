@@ -26,6 +26,20 @@ memory [options]
 Options can be combined in a single call, e.g. `memory --stats --modules`.
 Running `memory` with no arguments prints the help message.
 
+## Multiple heaps
+
+All reports are driven by dmheap's [default heap list](../../../docs/dmheap.md#the-default-heap-list)
+(`dmheap_get_stats`/`dmheap_for_each_*_block` called with a `NULL` context),
+not a single fixed heap:
+
+- `--stats` prints each default heap's statistics individually (`Heap #0`,
+  `Heap #1`, ...) followed by a combined `Total (all heaps)` section, when
+  more than one heap is registered as a default heap. With only one default
+  heap, it prints the original unlabeled `Heap statistics:` output.
+- `--modules` and `--fragmentation` walk every default heap's blocks and
+  report the combined totals, since a module's allocations may be spread
+  across more than one of them.
+
 ## Implementation Notes
 
 - The module-summary and fragmentation reports are built by walking dmheap's

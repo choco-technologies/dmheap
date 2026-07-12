@@ -18,8 +18,45 @@ largest, which turns the first-fit search into an effective best-fit search
 and keeps large blocks intact for large requests.
 
 Multiple independent heaps can coexist via separate `dmheap_context_t`
-instances (`dmheap_init`); most call sites pass `NULL` to use whichever
-context was registered as the default (`dmheap_set_default_context`).
+instances (`dmheap_init`); most call sites pass `NULL` to fall back to the
+*default heap list* instead of naming a context explicitly.
+
+### The default heap list
+
+The default heap list holds up to `DMHEAP_MAX_DEFAULT_CONTEXTS` (8) heaps.
+The very first heap ever initialized via `dmheap_init()` joins it
+automatically; `dmheap_add_default_context(ctx)` adds further heaps,
+`dmheap_remove_default_context(ctx)` takes one back out, and
+`dmheap_set_default_context(ctx)` replaces the whole list with a single entry
+(or clears it if `ctx` is `NULL`).
+
+Removing a heap from the list doesn't tear it down - it just stops NULL-context
+calls from reaching it. Do this *before* actually freeing/unmapping a heap's
+backing buffer (e.g. when unloading a driver/module that owns its own heap),
+otherwise a concurrent NULL-context call (malloc, free, get_stats, ...) could
+walk into memory that no longer belongs to the heap.
+
+When a `NULL` context is passed to an API function, the behavior depends on
+what the call needs:
+
+- **Allocation** (`dmheap_malloc`, `dmheap_aligned_alloc`, `dmheap_realloc`
+  growing a block, and the SAL `Dmod_Malloc`/`Dmod_MallocEx`/... wrappers)
+  tries every heap in the default list, in the order it was added, and
+  returns the first successful allocation - so a heap that's simply full
+  doesn't fail the request as long as another default heap has room.
+- **Pointer-based operations** (`dmheap_free`, `dmheap_realloc`,
+  `dmheap_retag`) search the default list for the heap that actually owns the
+  pointer, since a `NULL`-context allocation may have landed on any of them.
+- **Module registration** (`dmheap_register_module`,
+  `dmheap_unregister_module`, and `Dmod_FreeModule`) applies to every heap in
+  the list, so a module's memory is fully reclaimed regardless of which
+  default heap(s) it ended up allocating from.
+- **Reporting** (`dmheap_get_stats`, `dmheap_for_each_free_block`,
+  `dmheap_for_each_used_block`, `dmheap_concatenate_free_blocks`) aggregates
+  across every heap in the list.
+
+A heap not in the default list is never touched by a `NULL`-context call -
+pass its `dmheap_context_t*` explicitly to work with it.
 
 ## Module Tracking
 
@@ -35,11 +72,20 @@ has already been allocated under a different or absent identity.
 ### Initialization
 
 - `dmheap_init(buffer, size, alignment)` - initialize a heap over a raw
-  buffer, returning a context.
-- `dmheap_set_default_context(ctx)` / `dmheap_get_default_context()` - get or
-  set the context used when `NULL` is passed elsewhere.
+  buffer, returning a context. The first heap ever initialized joins the
+  default heap list automatically (see above).
+- `dmheap_add_default_context(ctx)` - add another heap to the default heap
+  list.
+- `dmheap_remove_default_context(ctx)` - remove a heap from the default heap
+  list (e.g. before tearing it down), without affecting the heap itself.
+- `dmheap_set_default_context(ctx)` - replace the default heap list with a
+  single entry (or clear it, if `ctx` is `NULL`).
+- `dmheap_get_default_context()` - the first (primary) heap in the default
+  list, or `NULL` if it's empty.
+- `dmheap_get_default_context_count()` / `dmheap_get_default_context_at(index)`
+  - enumerate every heap currently in the default list.
 - `dmheap_is_initialized(ctx)` - check whether a context has been
-  initialized.
+  initialized (`NULL` checks whether the default heap list is non-empty).
 
 ### Module registration
 

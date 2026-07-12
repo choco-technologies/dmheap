@@ -17,41 +17,81 @@ static void print_usage( void )
     Dmod_Printf("  -f, --fragmentation   Print a histogram of free block sizes\n");
     Dmod_Printf("  -h, --help            Show this help message\n\n");
     Dmod_Printf("Multiple options can be combined in a single call, e.g.\n");
-    Dmod_Printf("  memory --stats --modules\n");
+    Dmod_Printf("  memory --stats --modules\n\n");
+    Dmod_Printf("If more than one heap was registered as a default heap (see\n");
+    Dmod_Printf("dmheap_add_default_context()), --stats reports each heap individually plus\n");
+    Dmod_Printf("a combined total, and --modules/--fragmentation report combined across all of them.\n");
 }
 
 // ============================================================================
 //                              --stats
 // ============================================================================
 
+static void print_one_heap_stats( const dmheap_stats_t* stats )
+{
+    size_t total_block_count = stats->free_block_count + stats->used_block_count;
+
+    // Share of free memory that sits outside the single largest free block, i.e. how
+    // much of it is unusable for an allocation bigger than that block.
+    double fragmentation_percent = 0.0;
+    if( stats->free_bytes > 0 )
+    {
+        fragmentation_percent = ( (double)(stats->free_bytes - stats->largest_free_block) / (double)stats->free_bytes ) * 100.0;
+    }
+
+    Dmod_Printf("  Total size:     %zu bytes\n", stats->heap_size);
+    Dmod_Printf("  Free:           %zu bytes\n", stats->free_bytes);
+    Dmod_Printf("  Used:           %zu bytes\n", stats->used_bytes);
+    Dmod_Printf("  Blocks:         %zu (%zu free, %zu used)\n",
+        total_block_count, stats->free_block_count, stats->used_block_count);
+    Dmod_Printf("  Largest free:   %zu bytes\n", stats->largest_free_block);
+    Dmod_Printf("  Smallest free:  %zu bytes\n", stats->smallest_free_block);
+    Dmod_Printf("  Fragmentation:  %.1f%%\n", fragmentation_percent);
+}
+
 static void print_stats( void )
 {
-    dmheap_stats_t stats;
-    if( !dmheap_get_stats( NULL, &stats ) )
+    size_t heap_count = dmheap_get_default_context_count();
+    if( heap_count == 0 )
     {
         DMOD_LOG_ERROR("Failed to read heap statistics\n");
         return;
     }
 
-    size_t total_block_count = stats.free_block_count + stats.used_block_count;
-
-    // Share of free memory that sits outside the single largest free block, i.e. how
-    // much of it is unusable for an allocation bigger than that block.
-    double fragmentation_percent = 0.0;
-    if( stats.free_bytes > 0 )
+    // A single default heap: keep the original, unlabeled output.
+    if( heap_count == 1 )
     {
-        fragmentation_percent = ( (double)(stats.free_bytes - stats.largest_free_block) / (double)stats.free_bytes ) * 100.0;
+        dmheap_stats_t stats;
+        if( !dmheap_get_stats( dmheap_get_default_context_at(0), &stats ) )
+        {
+            DMOD_LOG_ERROR("Failed to read heap statistics\n");
+            return;
+        }
+        Dmod_Printf("Heap statistics:\n");
+        print_one_heap_stats( &stats );
+        return;
     }
 
-    Dmod_Printf("Heap statistics:\n");
-    Dmod_Printf("  Total size:     %zu bytes\n", stats.heap_size);
-    Dmod_Printf("  Free:           %zu bytes\n", stats.free_bytes);
-    Dmod_Printf("  Used:           %zu bytes\n", stats.used_bytes);
-    Dmod_Printf("  Blocks:         %zu (%zu free, %zu used)\n",
-        total_block_count, stats.free_block_count, stats.used_block_count);
-    Dmod_Printf("  Largest free:   %zu bytes\n", stats.largest_free_block);
-    Dmod_Printf("  Smallest free:  %zu bytes\n", stats.smallest_free_block);
-    Dmod_Printf("  Fragmentation:  %.1f%%\n", fragmentation_percent);
+    // Multiple default heaps: break the numbers down per heap, then show the combined total.
+    Dmod_Printf("Heap statistics (%zu heaps):\n", heap_count);
+    for( size_t i = 0; i < heap_count; i++ )
+    {
+        dmheap_stats_t stats;
+        if( !dmheap_get_stats( dmheap_get_default_context_at(i), &stats ) )
+        {
+            DMOD_LOG_ERROR("Failed to read statistics for heap #%zu\n", i);
+            continue;
+        }
+        Dmod_Printf("Heap #%zu:\n", i);
+        print_one_heap_stats( &stats );
+    }
+
+    dmheap_stats_t total;
+    if( dmheap_get_stats( NULL, &total ) )
+    {
+        Dmod_Printf("Total (all heaps):\n");
+        print_one_heap_stats( &total );
+    }
 }
 
 // ============================================================================

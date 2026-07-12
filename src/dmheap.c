@@ -36,18 +36,73 @@ typedef struct dmheap_context_t
     module_t* module_list; //!< Pointer to the list of registered modules.
 } dmheap_context_t;
 
-static dmheap_context_t* g_default_context = NULL;
+/**
+ * @brief Maximum number of heaps that can sit in the default heap list at once.
+ */
+#define DMHEAP_MAX_DEFAULT_CONTEXTS 8
+
+static dmheap_context_t* g_default_contexts[DMHEAP_MAX_DEFAULT_CONTEXTS];
+static size_t g_default_context_count = 0;
 
 /**
- * @brief Get the context to use (either provided or default).
- * 
- * @param ctx Pointer to the heap context (NULL to use default context).
- * 
- * @return Pointer to the context to use, or NULL if no context is available.
+ * @brief Add a heap to the default heap list. Caller must hold the critical section.
+ *
+ * @param ctx Pointer to the heap context to add.
+ *
+ * @return true if the heap was added (or already present), false if ctx is NULL
+ *         or the list is full.
  */
-static dmheap_context_t* get_context( dmheap_context_t* ctx )
+static bool add_default_context_locked( dmheap_context_t* ctx )
 {
-    return ctx != NULL ? ctx : g_default_context;
+    if( ctx == NULL )
+    {
+        return false;
+    }
+
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        if( g_default_contexts[i] == ctx )
+        {
+            return true;
+        }
+    }
+
+    if( g_default_context_count >= DMHEAP_MAX_DEFAULT_CONTEXTS )
+    {
+        DMOD_LOG_ERROR("dmheap: default heap list is full (max %d), cannot add heap %p.\n", DMHEAP_MAX_DEFAULT_CONTEXTS, ctx);
+        return false;
+    }
+
+    g_default_contexts[g_default_context_count++] = ctx;
+    return true;
+}
+
+/**
+ * @brief Remove a heap from the default heap list, if present. Caller must hold
+ * the critical section.
+ *
+ * Used when a heap is being torn down (e.g. a driver/module that owned it is
+ * being unloaded) so no later NULL-context call can dereference it.
+ *
+ * @param ctx Pointer to the heap context to remove.
+ *
+ * @return true if ctx was found (and removed), false otherwise.
+ */
+static bool remove_default_context_locked( dmheap_context_t* ctx )
+{
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        if( g_default_contexts[i] == ctx )
+        {
+            for( size_t j = i; j + 1 < g_default_context_count; j++ )
+            {
+                g_default_contexts[j] = g_default_contexts[j + 1];
+            }
+            g_default_context_count--;
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -560,13 +615,15 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buff
     ctx->used_list  = NULL;
     ctx->alignment  = alignment;
     ctx->module_list = NULL;  // Reset module list on initialization
-    
-    // Set as default context if none exists
-    if(g_default_context == NULL)
+
+    // The very first heap ever initialized becomes the default heap automatically.
+    // Later heaps must be added explicitly via dmheap_add_default_context() /
+    // dmheap_set_default_context().
+    if(g_default_context_count == 0)
     {
-        g_default_context = ctx;
+        add_default_context_locked( ctx );
     }
-    
+
     Dmod_ExitCritical();
     DMOD_LOG_INFO("== dmheap ver. %s ==\n", DMHEAP_VERSION);
     DMOD_LOG_INFO("dmheap: Initialized with buffer %p of size %lu.\n", heap_buffer, (unsigned long)heap_size);
@@ -576,30 +633,64 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buff
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _set_default_context, ( dmheap_context_t* ctx ) )
 {
     Dmod_EnterCritical();
-    g_default_context = ctx;
+    g_default_context_count = 0;
+    if( ctx != NULL )
+    {
+        add_default_context_locked( ctx );
+    }
     Dmod_ExitCritical();
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _add_default_context, ( dmheap_context_t* ctx ) )
+{
+    Dmod_EnterCritical();
+    bool added = add_default_context_locked( ctx );
+    Dmod_ExitCritical();
+    return added;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _remove_default_context, ( dmheap_context_t* ctx ) )
+{
+    Dmod_EnterCritical();
+    bool removed = remove_default_context_locked( ctx );
+    Dmod_ExitCritical();
+    return removed;
 }
 
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _get_default_context, ( void ) )
 {
-    return g_default_context;
+    return g_default_context_count > 0 ? g_default_contexts[0] : NULL;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, size_t,  _get_default_context_count, ( void ) )
+{
+    return g_default_context_count;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _get_default_context_at, ( size_t index ) )
+{
+    return index < g_default_context_count ? g_default_contexts[index] : NULL;
 }
 
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _is_initialized, ( dmheap_context_t* ctx ) )
 {
-    ctx = get_context( ctx );
-    return ctx != NULL && ctx->heap_start != NULL;
+    if( ctx != NULL )
+    {
+        return ctx->heap_start != NULL;
+    }
+    return g_default_context_count > 0;
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _register_module, ( dmheap_context_t* ctx, const char* module_name ) )
+/**
+ * @brief Register a module on a single, already-resolved heap context.
+ *
+ * @param ctx         Pointer to the heap context (must not be NULL).
+ * @param module_name Name of the module to register.
+ *
+ * @return true if the module is registered (either just now or already), false on failure.
+ */
+static bool register_module_in_context( dmheap_context_t* ctx, const char* module_name )
 {
-    ctx = get_context( ctx );
-    if( ctx == NULL )
-    {
-        DMOD_LOG_ERROR("dmheap: No context available for register_module.\n");
-        return false;
-    }
-    
     Dmod_EnterCritical();
     module_t* module = find_module_by_name( ctx, module_name );
     if( module != NULL )
@@ -619,22 +710,42 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _register_module, ( dmheap_conte
     return true;
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _unregister_module, ( dmheap_context_t* ctx, const char* module_name ) )
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _register_module, ( dmheap_context_t* ctx, const char* module_name ) )
 {
-    ctx = get_context( ctx );
-    if( ctx == NULL )
+    if( ctx != NULL )
     {
-        DMOD_LOG_ERROR("dmheap: No context available for unregister_module.\n");
-        return;
+        return register_module_in_context( ctx, module_name );
     }
-    
-    // it is very likely, that module_name is inside a buffer we will free, so we need to copy it first
-    char module_name_copy[DMOD_MAX_MODULE_NAME_LENGTH];
-    strncpy( module_name_copy, module_name, DMOD_MAX_MODULE_NAME_LENGTH - 1 );
-    module_name_copy[DMOD_MAX_MODULE_NAME_LENGTH - 1] = '\0';
 
+    if( g_default_context_count == 0 )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for register_module.\n");
+        return false;
+    }
+
+    // A NULL context registers the module on every default heap, since a later
+    // allocation with a NULL context (see dmheap_malloc) may land on any of them.
+    bool all_succeeded = true;
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        if( !register_module_in_context( g_default_contexts[i], module_name ) )
+        {
+            all_succeeded = false;
+        }
+    }
+    return all_succeeded;
+}
+
+/**
+ * @brief Unregister a module (if present) on a single, already-resolved heap context.
+ *
+ * @param ctx         Pointer to the heap context (must not be NULL).
+ * @param module_name Name of the module to unregister.
+ */
+static void unregister_module_in_context( dmheap_context_t* ctx, const char* module_name )
+{
     Dmod_EnterCritical();
-    module_t* module = find_module_by_name( ctx, module_name_copy );
+    module_t* module = find_module_by_name( ctx, module_name );
     if( module == NULL )
     {
         Dmod_ExitCritical();
@@ -647,117 +758,51 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _unregister_module, ( dmheap_con
     // load/unload cycle at a time (see Dmod_Context_Delete for the same reasoning).
     concatenate_free_blocks_locked( ctx );
     Dmod_ExitCritical();
-    DMOD_LOG_INFO("dmheap: Module %s unregistered successfully.\n", module_name_copy);
+    DMOD_LOG_INFO("dmheap: Module %s unregistered successfully.\n", module_name);
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _malloc, ( dmheap_context_t* ctx, size_t size, const char* module_name ) )
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _unregister_module, ( dmheap_context_t* ctx, const char* module_name ) )
 {
-    ctx = get_context( ctx );
-    if( ctx == NULL )
-    {
-        DMOD_LOG_ERROR("dmheap: No context available for malloc.\n");
-        return NULL;
-    }
-    return dmheap_aligned_alloc( ctx, ctx->alignment, size, module_name );
-}
+    // it is very likely, that module_name is inside a buffer we will free, so we need to copy it first
+    char module_name_copy[DMOD_MAX_MODULE_NAME_LENGTH];
+    strncpy( module_name_copy, module_name, DMOD_MAX_MODULE_NAME_LENGTH - 1 );
+    module_name_copy[DMOD_MAX_MODULE_NAME_LENGTH - 1] = '\0';
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _realloc, ( dmheap_context_t* ctx, void* ptr, size_t size, const char* module_name) )
-{
-    ctx = get_context( ctx );
-    if( ctx == NULL )
+    if( ctx != NULL )
     {
-        DMOD_LOG_ERROR("dmheap: No context available for realloc.\n");
-        return NULL;
-    }
-    
-    if( ptr == NULL )
-    {
-        return dmheap_aligned_alloc( ctx, ctx->alignment, size, module_name );
-    }
-
-    Dmod_EnterCritical();
-    block_t* block = find_block_by_address( ctx, ptr );
-    if( block == NULL )
-    {
-        Dmod_ExitCritical();
-        DMOD_LOG_ERROR("dmheap: _realloc called with invalid pointer %p from module %s.\n", ptr, module_name);
-        return NULL;
-    }
-
-    void* new_ptr = NULL;
-    if(size < block->size)
-    {
-        remove_block( &ctx->used_list, block );
-        block_t* new_block = split_block( ctx, block, size );
-        if( new_block != NULL )
-        {
-            add_free_block( &ctx->free_list, new_block );
-        }
-        add_block( &ctx->used_list, block );
-        new_ptr = ptr;
-    }
-    else if(size > block->size)
-    {
-        new_ptr = dmheap_aligned_alloc( ctx, ctx->alignment, size, module_name );
-        if( new_ptr != NULL )
-        {
-            memcpy( new_ptr, ptr, block->size );
-            remove_block( &ctx->used_list, block );
-            add_free_block( &ctx->free_list, block );
-        }
-    }
-    else
-    {
-        new_ptr = ptr;
-    }
-    
-    Dmod_ExitCritical();
-    return new_ptr;
-}
-
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _free, ( dmheap_context_t* ctx, void* ptr, bool concatenate ) )
-{
-    if( ptr == NULL )
-    {
-        return;
-    }
-    
-    ctx = get_context( ctx );
-    if( ctx == NULL )
-    {
-        DMOD_LOG_ERROR("dmheap: No context available for free.\n");
+        unregister_module_in_context( ctx, module_name_copy );
         return;
     }
 
-    Dmod_EnterCritical();
-    block_t* block = find_block_by_address( ctx, ptr );
-    if( block == NULL )
+    if( g_default_context_count == 0 )
     {
-        Dmod_ExitCritical();
-        DMOD_LOG_ERROR("dmheap: _free called with invalid pointer %p.\n", ptr);
+        DMOD_LOG_ERROR("dmheap: No context available for unregister_module.\n");
         return;
     }
 
-    remove_block( &ctx->used_list, block );
-    add_free_block( &ctx->free_list, block );
-
-    if(concatenate)
+    // A module registered with a NULL context may have ended up with blocks on any
+    // default heap (see dmheap_malloc) - unregister it everywhere so nothing leaks.
+    for( size_t i = 0; i < g_default_context_count; i++ )
     {
-        concatenate_free_blocks_locked( ctx );
+        unregister_module_in_context( g_default_contexts[i], module_name_copy );
     }
-
-    Dmod_ExitCritical();
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context_t* ctx, size_t alignment, size_t size, const char* module_name) )
+/**
+ * @brief Allocate aligned memory from a single, already-resolved heap context.
+ *
+ * This is the core allocation algorithm, factored out so it can be reused both
+ * for an explicit context and, per-heap, when searching the default heap list.
+ *
+ * @param ctx         Pointer to the heap context (must not be NULL).
+ * @param alignment   Alignment requirement.
+ * @param size        Size of memory to allocate.
+ * @param module_name Name of the module requesting allocation (for logging).
+ *
+ * @return Pointer to the allocated memory, or NULL if allocation fails.
+ */
+static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, size_t size, const char* module_name )
 {
-    ctx = get_context( ctx );
-    if( ctx == NULL )
-    {
-        DMOD_LOG_ERROR("dmheap: No context available for aligned_alloc.\n");
-        return NULL;
-    }
-    
     Dmod_EnterCritical();
     size_t aligned_size = align_size( size, alignment );
     block_t* block = find_suitable_block( ctx, aligned_size, alignment );
@@ -879,69 +924,342 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context
     return aligned_address;
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _concatenate_free_blocks, ( dmheap_context_t* ctx ) )
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context_t* ctx, size_t alignment, size_t size, const char* module_name) )
 {
-    ctx = get_context( ctx );
-    if( ctx == NULL )
+    if( ctx != NULL )
     {
-        DMOD_LOG_ERROR("dmheap: No context available for concatenate_free_blocks.\n");
-        return;
+        return aligned_alloc_in_context( ctx, alignment, size, module_name );
     }
 
-    Dmod_EnterCritical();
-    concatenate_free_blocks_locked( ctx );
-    Dmod_ExitCritical();
+    if( g_default_context_count == 0 )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for aligned_alloc.\n");
+        return NULL;
+    }
+
+    // Try every default heap in the order it was added, until one can satisfy the request.
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        void* ptr = aligned_alloc_in_context( g_default_contexts[i], alignment, size, module_name );
+        if( ptr != NULL )
+        {
+            return ptr;
+        }
+    }
+
+    DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s in any default heap.\n", size, alignment, module_name);
+    return NULL;
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool, _retag, ( dmheap_context_t* ctx, void* ptr, const char* new_module_name ) )
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _malloc, ( dmheap_context_t* ctx, size_t size, const char* module_name ) )
 {
-    ctx = get_context( ctx );
-    if( ctx == NULL )
+    if( ctx != NULL )
     {
-        DMOD_LOG_ERROR("dmheap: No context available for retag.\n");
-        return false;
-    }
-    if( ptr == NULL || new_module_name == NULL )
-    {
-        DMOD_LOG_ERROR("dmheap: retag called with invalid arguments.\n");
-        return false;
+        return aligned_alloc_in_context( ctx, ctx->alignment, size, module_name );
     }
 
+    if( g_default_context_count == 0 )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for malloc.\n");
+        return NULL;
+    }
+
+    // Try every default heap in the order it was added, using each heap's own
+    // alignment, until one can satisfy the request.
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        dmheap_context_t* heap = g_default_contexts[i];
+        void* ptr = aligned_alloc_in_context( heap, heap->alignment, size, module_name );
+        if( ptr != NULL )
+        {
+            return ptr;
+        }
+    }
+
+    DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes for module %s in any default heap.\n", size, module_name);
+    return NULL;
+}
+
+/**
+ * @brief Grow/shrink/no-op an already-located block in place, allocating a
+ * replacement in the same context when it needs to grow. Caller must already
+ * hold the heap's critical section.
+ *
+ * @param ctx         Pointer to the heap context that owns block/ptr.
+ * @param block       The block currently backing ptr.
+ * @param ptr         Pointer previously returned by an allocation function.
+ * @param size        New size of memory to allocate.
+ * @param module_name Name of the module requesting reallocation (for logging).
+ *
+ * @return Pointer to the reallocated memory, or NULL if growing failed.
+ */
+static void* realloc_block_locked( dmheap_context_t* ctx, block_t* block, void* ptr, size_t size, const char* module_name )
+{
+    void* new_ptr = NULL;
+    if(size < block->size)
+    {
+        remove_block( &ctx->used_list, block );
+        block_t* new_block = split_block( ctx, block, size );
+        if( new_block != NULL )
+        {
+            add_free_block( &ctx->free_list, new_block );
+        }
+        add_block( &ctx->used_list, block );
+        new_ptr = ptr;
+    }
+    else if(size > block->size)
+    {
+        new_ptr = aligned_alloc_in_context( ctx, ctx->alignment, size, module_name );
+        if( new_ptr != NULL )
+        {
+            memcpy( new_ptr, ptr, block->size );
+            remove_block( &ctx->used_list, block );
+            add_free_block( &ctx->free_list, block );
+        }
+    }
+    else
+    {
+        new_ptr = ptr;
+    }
+    return new_ptr;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _realloc, ( dmheap_context_t* ctx, void* ptr, size_t size, const char* module_name) )
+{
+    if( ptr == NULL )
+    {
+        return dmheap_malloc( ctx, size, module_name );
+    }
+
+    if( ctx != NULL )
+    {
+        Dmod_EnterCritical();
+        block_t* block = find_block_by_address( ctx, ptr );
+        if( block == NULL )
+        {
+            Dmod_ExitCritical();
+            DMOD_LOG_ERROR("dmheap: _realloc called with invalid pointer %p from module %s.\n", ptr, module_name);
+            return NULL;
+        }
+        void* new_ptr = realloc_block_locked( ctx, block, ptr, size, module_name );
+        Dmod_ExitCritical();
+        return new_ptr;
+    }
+
+    if( g_default_context_count == 0 )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for realloc.\n");
+        return NULL;
+    }
+
+    // ptr may have been handed out by any default heap (see dmheap_malloc) - find
+    // whichever one actually owns it.
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        dmheap_context_t* heap = g_default_contexts[i];
+        Dmod_EnterCritical();
+        block_t* block = find_block_by_address( heap, ptr );
+        if( block != NULL )
+        {
+            void* new_ptr = realloc_block_locked( heap, block, ptr, size, module_name );
+            Dmod_ExitCritical();
+            return new_ptr;
+        }
+        Dmod_ExitCritical();
+    }
+
+    DMOD_LOG_ERROR("dmheap: _realloc called with invalid pointer %p from module %s.\n", ptr, module_name);
+    return NULL;
+}
+
+/**
+ * @brief Free a block if it belongs to the given, already-resolved heap context.
+ *
+ * @param ctx         Pointer to the heap context to search (must not be NULL).
+ * @param ptr         Pointer to the memory to free.
+ * @param concatenate If true, attempt to merge adjacent free blocks after freeing.
+ *
+ * @return true if ptr was found in ctx (and freed), false otherwise.
+ */
+static bool free_block_in_context( dmheap_context_t* ctx, void* ptr, bool concatenate )
+{
     Dmod_EnterCritical();
     block_t* block = find_block_by_address( ctx, ptr );
     if( block == NULL )
     {
         Dmod_ExitCritical();
-        DMOD_LOG_ERROR("dmheap: retag called with unknown pointer %p.\n", ptr);
         return false;
+    }
+
+    remove_block( &ctx->used_list, block );
+    add_free_block( &ctx->free_list, block );
+
+    if(concatenate)
+    {
+        concatenate_free_blocks_locked( ctx );
+    }
+
+    Dmod_ExitCritical();
+    return true;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _free, ( dmheap_context_t* ctx, void* ptr, bool concatenate ) )
+{
+    if( ptr == NULL )
+    {
+        return;
+    }
+
+    if( ctx != NULL )
+    {
+        if( !free_block_in_context( ctx, ptr, concatenate ) )
+        {
+            DMOD_LOG_ERROR("dmheap: _free called with invalid pointer %p.\n", ptr);
+        }
+        return;
+    }
+
+    if( g_default_context_count == 0 )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for free.\n");
+        return;
+    }
+
+    // ptr may have been handed out by any default heap (see dmheap_malloc) - find
+    // whichever one actually owns it.
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        if( free_block_in_context( g_default_contexts[i], ptr, concatenate ) )
+        {
+            return;
+        }
+    }
+
+    DMOD_LOG_ERROR("dmheap: _free called with invalid pointer %p.\n", ptr);
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _concatenate_free_blocks, ( dmheap_context_t* ctx ) )
+{
+    if( ctx != NULL )
+    {
+        Dmod_EnterCritical();
+        concatenate_free_blocks_locked( ctx );
+        Dmod_ExitCritical();
+        return;
+    }
+
+    if( g_default_context_count == 0 )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for concatenate_free_blocks.\n");
+        return;
+    }
+
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        Dmod_EnterCritical();
+        concatenate_free_blocks_locked( g_default_contexts[i] );
+        Dmod_ExitCritical();
+    }
+}
+
+/**
+ * @brief Result of attempting to retag a pointer against a single heap context.
+ */
+typedef enum retag_result_t
+{
+    RETAG_NOT_FOUND,    //!< ptr does not belong to this context.
+    RETAG_FAILED,       //!< ptr belongs to this context, but the target module could not be created.
+    RETAG_OK,           //!< ptr was found and retagged successfully.
+} retag_result_t;
+
+/**
+ * @brief Retag a block if it belongs to the given, already-resolved heap context.
+ *
+ * @param ctx             Pointer to the heap context to search (must not be NULL).
+ * @param ptr             Pointer previously returned by an allocation function.
+ * @param new_module_name Name of the module to attribute the block to from now on.
+ */
+static retag_result_t retag_block_in_context( dmheap_context_t* ctx, void* ptr, const char* new_module_name )
+{
+    Dmod_EnterCritical();
+    block_t* block = find_block_by_address( ctx, ptr );
+    if( block == NULL )
+    {
+        Dmod_ExitCritical();
+        return RETAG_NOT_FOUND;
     }
 
     module_t* module = get_or_create_module( ctx, new_module_name );
     if( module == NULL )
     {
         Dmod_ExitCritical();
-        DMOD_LOG_ERROR("dmheap: Unable to retag %p - failed to get/create module %s.\n", ptr, new_module_name);
-        return false;
+        return RETAG_FAILED;
     }
 
     block->owner = module;
     Dmod_ExitCritical();
-    return true;
+    return RETAG_OK;
 }
 
-DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool, _get_stats, ( dmheap_context_t* ctx, dmheap_stats_t* out_stats ) )
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool, _retag, ( dmheap_context_t* ctx, void* ptr, const char* new_module_name ) )
 {
-    ctx = get_context( ctx );
-    if( ctx == NULL || out_stats == NULL )
+    if( ptr == NULL || new_module_name == NULL )
     {
-        DMOD_LOG_ERROR("dmheap: get_stats called with invalid arguments.\n");
+        DMOD_LOG_ERROR("dmheap: retag called with invalid arguments.\n");
         return false;
     }
 
-    memset( out_stats, 0, sizeof(*out_stats) );
-    out_stats->heap_size = ctx->heap_size;
+    if( ctx != NULL )
+    {
+        retag_result_t result = retag_block_in_context( ctx, ptr, new_module_name );
+        if( result == RETAG_NOT_FOUND )
+        {
+            DMOD_LOG_ERROR("dmheap: retag called with unknown pointer %p.\n", ptr);
+        }
+        else if( result == RETAG_FAILED )
+        {
+            DMOD_LOG_ERROR("dmheap: Unable to retag %p - failed to get/create module %s.\n", ptr, new_module_name);
+        }
+        return result == RETAG_OK;
+    }
 
-    Dmod_EnterCritical();
+    if( g_default_context_count == 0 )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for retag.\n");
+        return false;
+    }
+
+    // ptr may have been handed out by any default heap (see dmheap_malloc) - find
+    // whichever one actually owns it.
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        retag_result_t result = retag_block_in_context( g_default_contexts[i], ptr, new_module_name );
+        if( result == RETAG_OK )
+        {
+            return true;
+        }
+        if( result == RETAG_FAILED )
+        {
+            DMOD_LOG_ERROR("dmheap: Unable to retag %p - failed to get/create module %s.\n", ptr, new_module_name);
+            return false;
+        }
+        // RETAG_NOT_FOUND: keep searching the remaining default heaps.
+    }
+
+    DMOD_LOG_ERROR("dmheap: retag called with unknown pointer %p.\n", ptr);
+    return false;
+}
+
+/**
+ * @brief Accumulate one heap context's statistics into a running total. Caller
+ * must already hold the heap's critical section.
+ *
+ * @param ctx       Pointer to the heap context.
+ * @param out_stats Statistics accumulator, updated in place.
+ */
+static void accumulate_stats_locked( dmheap_context_t* ctx, dmheap_stats_t* out_stats )
+{
+    out_stats->heap_size += ctx->heap_size;
 
     for( block_t* block = ctx->free_list; block != NULL; block = block->next )
     {
@@ -962,39 +1280,96 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool, _get_stats, ( dmheap_context_t* c
         out_stats->used_bytes += block->size;
         out_stats->used_block_count++;
     }
+}
 
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool, _get_stats, ( dmheap_context_t* ctx, dmheap_stats_t* out_stats ) )
+{
+    if( out_stats == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: get_stats called with invalid arguments.\n");
+        return false;
+    }
+
+    memset( out_stats, 0, sizeof(*out_stats) );
+
+    if( ctx != NULL )
+    {
+        Dmod_EnterCritical();
+        accumulate_stats_locked( ctx, out_stats );
+        Dmod_ExitCritical();
+        return true;
+    }
+
+    if( g_default_context_count == 0 )
+    {
+        DMOD_LOG_ERROR("dmheap: get_stats called with invalid arguments.\n");
+        return false;
+    }
+
+    // Aggregate across every default heap.
+    Dmod_EnterCritical();
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        accumulate_stats_locked( g_default_contexts[i], out_stats );
+    }
     Dmod_ExitCritical();
     return true;
 }
 
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void, _for_each_free_block, ( dmheap_context_t* ctx, dmheap_block_visitor_t visitor, void* user_data ) )
 {
-    ctx = get_context( ctx );
-    if( ctx == NULL || visitor == NULL )
+    if( visitor == NULL )
     {
         return;
     }
 
-    Dmod_EnterCritical();
-    for( block_t* block = ctx->free_list; block != NULL; block = block->next )
+    if( ctx != NULL )
     {
-        visitor( block->address, block->size, NULL, user_data );
+        Dmod_EnterCritical();
+        for( block_t* block = ctx->free_list; block != NULL; block = block->next )
+        {
+            visitor( block->address, block->size, NULL, user_data );
+        }
+        Dmod_ExitCritical();
+        return;
+    }
+
+    Dmod_EnterCritical();
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        for( block_t* block = g_default_contexts[i]->free_list; block != NULL; block = block->next )
+        {
+            visitor( block->address, block->size, NULL, user_data );
+        }
     }
     Dmod_ExitCritical();
 }
 
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void, _for_each_used_block, ( dmheap_context_t* ctx, dmheap_block_visitor_t visitor, void* user_data ) )
 {
-    ctx = get_context( ctx );
-    if( ctx == NULL || visitor == NULL )
+    if( visitor == NULL )
     {
         return;
     }
 
-    Dmod_EnterCritical();
-    for( block_t* block = ctx->used_list; block != NULL; block = block->next )
+    if( ctx != NULL )
     {
-        visitor( block->address, block->size, block->owner != NULL ? block->owner->name : NULL, user_data );
+        Dmod_EnterCritical();
+        for( block_t* block = ctx->used_list; block != NULL; block = block->next )
+        {
+            visitor( block->address, block->size, block->owner != NULL ? block->owner->name : NULL, user_data );
+        }
+        Dmod_ExitCritical();
+        return;
+    }
+
+    Dmod_EnterCritical();
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        for( block_t* block = g_default_contexts[i]->used_list; block != NULL; block = block->next )
+        {
+            visitor( block->address, block->size, block->owner != NULL ? block->owner->name : NULL, user_data );
+        }
     }
     Dmod_ExitCritical();
 }
