@@ -797,7 +797,11 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _unregister_module, ( dmheap_con
  * @param ctx         Pointer to the heap context (must not be NULL).
  * @param alignment   Alignment requirement.
  * @param size        Size of memory to allocate.
- * @param module_name Name of the module requesting allocation (for logging).
+ * @param module_name Name of the module requesting allocation, recorded as the
+ *                    block's owner on success. Failures are not logged here -
+ *                    only the caller knows whether this is a final failure or
+ *                    one heap out of several being tried in a default-heap
+ *                    fallback search, so it logs (or not) accordingly.
  *
  * @return Pointer to the allocated memory, or NULL if allocation fails.
  */
@@ -819,7 +823,6 @@ static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, 
     if( block == NULL )
     {
         Dmod_ExitCritical();
-        DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s.\n", size, alignment, module_name);
         return NULL;
     }
 
@@ -860,7 +863,6 @@ static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, 
                 DMOD_ASSERT_MSG(false, "Unexpected error - check find_suitable_block logic.");
                 // Split failed, can't use this block efficiently
                 Dmod_ExitCritical();
-                DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s - split failed.\n", size, alignment, module_name);
                 return NULL;
             }
         }
@@ -891,7 +893,6 @@ static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, 
                     // Can't split, return the block to free list and fail
                     add_free_block( &ctx->free_list, block );
                     Dmod_ExitCritical();
-                    DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s - insufficient padding.\n", size, alignment, module_name);
                     return NULL;
                 }
             }
@@ -900,7 +901,6 @@ static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, 
                 // Not enough space, return the block and fail
                 add_free_block( &ctx->free_list, block );
                 Dmod_ExitCritical();
-                DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s - insufficient space.\n", size, alignment, module_name);
                 return NULL;
             }
         }
@@ -928,7 +928,12 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context
 {
     if( ctx != NULL )
     {
-        return aligned_alloc_in_context( ctx, alignment, size, module_name );
+        void* ptr = aligned_alloc_in_context( ctx, alignment, size, module_name );
+        if( ptr == NULL )
+        {
+            DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s.\n", size, alignment, module_name);
+        }
+        return ptr;
     }
 
     if( g_default_context_count == 0 )
@@ -938,6 +943,8 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context
     }
 
     // Try every default heap in the order it was added, until one can satisfy the request.
+    // Failing on any one heap along the way is expected, not an error - only log if every
+    // heap in the search comes up empty (below).
     for( size_t i = 0; i < g_default_context_count; i++ )
     {
         void* ptr = aligned_alloc_in_context( g_default_contexts[i], alignment, size, module_name );
@@ -955,7 +962,12 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _malloc, ( dmheap_context_t* ctx
 {
     if( ctx != NULL )
     {
-        return aligned_alloc_in_context( ctx, ctx->alignment, size, module_name );
+        void* ptr = aligned_alloc_in_context( ctx, ctx->alignment, size, module_name );
+        if( ptr == NULL )
+        {
+            DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes for module %s.\n", size, module_name);
+        }
+        return ptr;
     }
 
     if( g_default_context_count == 0 )
@@ -965,7 +977,8 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _malloc, ( dmheap_context_t* ctx
     }
 
     // Try every default heap in the order it was added, using each heap's own
-    // alignment, until one can satisfy the request.
+    // alignment, until one can satisfy the request. Failing on any one heap along
+    // the way is expected, not an error - only log if every heap comes up empty.
     for( size_t i = 0; i < g_default_context_count; i++ )
     {
         dmheap_context_t* heap = g_default_contexts[i];
@@ -1015,6 +1028,10 @@ static void* realloc_block_locked( dmheap_context_t* ctx, block_t* block, void* 
             memcpy( new_ptr, ptr, block->size );
             remove_block( &ctx->used_list, block );
             add_free_block( &ctx->free_list, block );
+        }
+        else
+        {
+            DMOD_LOG_ERROR("dmheap: Unable to grow allocation to %zu bytes for module %s.\n", size, module_name);
         }
     }
     else
