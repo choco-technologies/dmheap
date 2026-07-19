@@ -5,69 +5,6 @@ on:
     types: [created]
 
 jobs:
-  build-release:
-    name: Build Release Package
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    
-    container:
-      image: chocotechnologies/dmod:1.0.4
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Extract version from tag
-        id: get_version
-        run: |
-          # Extract version from tag (e.g., v1.2 -> 1.2)
-          VERSION="${{ github.event.release.tag_name }}"
-          VERSION="${VERSION#v}"  # Remove 'v' prefix if present
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Extracted version: $VERSION"
-      
-      - name: Prepare release package
-        run: |
-          set -e
-          mkdir -p release_package
-          
-          # Copy dmheap resource file
-          cp dmheap.dmr release_package/
-          
-          # Copy header files
-          mkdir -p release_package/include
-          cp include/dmheap.h release_package/include/
-
-          # Copy documentation and license
-          cp -r docs release_package/docs
-          cp README.md release_package/
-          cp LICENSE release_package/
-
-          # Create release notes file from GitHub release
-          echo "${{ github.event.release.body }}" > release_package/RELEASE_NOTES.txt
-
-          echo "Package contents:"
-          ls -la release_package/
-          ls -la release_package/include/
-          ls -la release_package/docs/
-      
-      - name: Create release archive
-        run: |
-          cd release_package
-          # dmheap is architecture-independent (headers only), so no arch suffix needed
-          zip -r ../dmheap-${{ github.event.release.tag_name }}.zip .
-          cd ..
-          echo "Created archive:"
-          ls -lh dmheap-*.zip
-      
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-package
-          path: dmheap-${{ github.event.release.tag_name }}.zip
-          retention-days: 1
-
   discover-architectures:
     name: Discover Architectures
     runs-on: ubuntu-latest
@@ -99,6 +36,98 @@ jobs:
 
           echo "Found architectures: $ARCHS"
           echo "architectures=$ARCHS" >> $GITHUB_OUTPUT
+
+  build-release:
+    name: Build Release Package for ${{ matrix.arch_name }}
+    needs: discover-architectures
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        arch_name: ${{ fromJson(needs.discover-architectures.outputs.architectures) }}
+
+    container:
+      image: chocotechnologies/dmod:1.0.4
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          # Extract version from tag (e.g., v1.2 -> 1.2)
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"  # Remove 'v' prefix if present
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+      - name: Build dmheap for ${{ matrix.arch_name }}
+        run: |
+          set -e
+          ARCH_DIR_NAME=$(echo "${{ matrix.arch_name }}" | sed 's|/|-|g')
+          echo "ARCH_DIR_NAME=$ARCH_DIR_NAME" >> $GITHUB_ENV
+          echo "ARTIFACT_NAME=release-$ARCH_DIR_NAME" >> $GITHUB_ENV
+
+          cmake -B "build_$ARCH_DIR_NAME" -DDMOD_TOOLS_NAME=arch/${{ matrix.arch_name }}
+          # Build only the dmheap target itself, not the default "all" target -
+          # the latter would also build dmod's own sibling dmod_system component
+          # (unconditionally added whenever DMOD_MODE=DMOD_SYSTEM), which dmheap
+          # does not depend on and which does not compile on every dmod-supported
+          # toolchain (e.g. xtensa/esp32s3's newlib is missing <sys/termios.h>).
+          cmake --build "build_$ARCH_DIR_NAME" --target dmheap -j"$(nproc)"
+
+          test -f "build_$ARCH_DIR_NAME/libdmheap.a"
+          echo "✓ libdmheap.a created successfully for ${{ matrix.arch_name }}"
+          ls -la "build_$ARCH_DIR_NAME/libdmheap.a"
+
+      - name: Prepare release package
+        run: |
+          set -e
+          mkdir -p release_package
+
+          # Copy dmheap resource file
+          cp dmheap.dmr release_package/
+
+          # Copy header files
+          mkdir -p release_package/include
+          cp include/dmheap.h release_package/include/
+
+          # Copy the precompiled static library
+          mkdir -p release_package/lib
+          cp "build_${ARCH_DIR_NAME}/libdmheap.a" release_package/lib/
+
+          # Copy documentation and license
+          cp -r docs release_package/docs
+          cp README.md release_package/
+          cp LICENSE release_package/
+
+          # Create release notes file from GitHub release
+          echo "${{ github.event.release.body }}" > release_package/RELEASE_NOTES.txt
+
+          echo "Package contents:"
+          find release_package -type f
+
+      - name: Create release archive
+        run: |
+          set -e
+          PACKAGE_NAME="dmheap-${{ github.event.release.tag_name }}-${ARCH_DIR_NAME}"
+          # zip the package directory's *contents*, not the directory itself -
+          # dmf-get expects dmheap.dmr directly at the zip root, so wrapping
+          # everything under a "${PACKAGE_NAME}/" prefix breaks dmf-get's
+          # headers/lib extraction (see dmlist/dmosi-posix releases, which hit
+          # exactly this bug).
+          (cd release_package && zip -r "../${PACKAGE_NAME}.zip" .)
+          echo "Created archive:"
+          ls -lh dmheap-*.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: dmheap-${{ github.event.release.tag_name }}-*.zip
+          retention-days: 1
 
   build-memory-release:
     name: Build memory for ${{ matrix.arch_name }}
@@ -226,7 +255,7 @@ jobs:
           set -e
           # Upload all release archives to the GitHub release
           shopt -s nullglob
-          zip_files=(artifacts/release-package/*.zip artifacts/memory-release-*/*.zip)
+          zip_files=(artifacts/release-*/*.zip artifacts/memory-release-*/*.zip)
 
           if [ ${#zip_files[@]} -eq 0 ]; then
             echo "Error: No artifacts found to upload"
@@ -288,7 +317,7 @@ jobs:
         run: |
           set -e
           shopt -s nullglob
-          zip_files=(artifacts/release-package/*.zip artifacts/memory-release-*/*.zip)
+          zip_files=(artifacts/release-*/*.zip artifacts/memory-release-*/*.zip)
 
           for zip_file in "${zip_files[@]}"; do
             echo "Uploading $zip_file to vlatest..."

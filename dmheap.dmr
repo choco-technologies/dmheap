@@ -6,6 +6,10 @@
 # Include directory with dmheap.h header
 inc=./include => ${destination}/${module}/include
 
+# === Static Library ===
+# Precompiled static library (architecture-specific build)
+lib=./lib/libdmheap.a => ${destination}/${module}/lib/libdmheap.a
+
 # === Documentation ===
 # README file
 readme=./README.md => ${destination}/${module}/README.md
