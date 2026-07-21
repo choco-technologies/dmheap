@@ -42,7 +42,7 @@ typedef struct dmheap_context_t
 #define DMHEAP_MAX_DEFAULT_CONTEXTS 8
 
 static dmheap_context_t* g_default_contexts[DMHEAP_MAX_DEFAULT_CONTEXTS];
-static size_t g_default_context_count = 0;
+static int32_t g_default_context_count = 0;
 
 /**
  * @brief Add a heap to the default heap list. Caller must hold the critical section.
@@ -945,7 +945,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context
     // Try every default heap in the order it was added, until one can satisfy the request.
     // Failing on any one heap along the way is expected, not an error - only log if every
     // heap in the search comes up empty (below).
-    for( size_t i = 0; i < g_default_context_count; i++ )
+    for( int32_t i = (g_default_context_count - 1); i >= 0; i-- )
     {
         void* ptr = aligned_alloc_in_context( g_default_contexts[i], alignment, size, module_name );
         if( ptr != NULL )
@@ -979,7 +979,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _malloc, ( dmheap_context_t* ctx
     // Try every default heap in the order it was added, using each heap's own
     // alignment, until one can satisfy the request. Failing on any one heap along
     // the way is expected, not an error - only log if every heap comes up empty.
-    for( size_t i = 0; i < g_default_context_count; i++ )
+    for( int32_t i = (g_default_context_count - 1); i >= 0; i-- )
     {
         dmheap_context_t* heap = g_default_contexts[i];
         void* ptr = aligned_alloc_in_context( heap, heap->alignment, size, module_name );
@@ -1071,7 +1071,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _realloc, ( dmheap_context_t* ct
 
     // ptr may have been handed out by any default heap (see dmheap_malloc) - find
     // whichever one actually owns it.
-    for( size_t i = 0; i < g_default_context_count; i++ )
+    for( int32_t i = (g_default_context_count - 1); i >= 0 ; i-- )
     {
         dmheap_context_t* heap = g_default_contexts[i];
         Dmod_EnterCritical();
@@ -1144,7 +1144,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _free, ( dmheap_context_t* ctx, 
 
     // ptr may have been handed out by any default heap (see dmheap_malloc) - find
     // whichever one actually owns it.
-    for( size_t i = 0; i < g_default_context_count; i++ )
+    for( int32_t i = (g_default_context_count - 1); i >= 0; i-- )
     {
         if( free_block_in_context( g_default_contexts[i], ptr, concatenate ) )
         {
@@ -1171,7 +1171,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void , _concatenate_free_blocks, ( dmhe
         return;
     }
 
-    for( size_t i = 0; i < g_default_context_count; i++ )
+    for( int32_t i = (g_default_context_count - 1); i >= 0; i-- )
     {
         Dmod_EnterCritical();
         concatenate_free_blocks_locked( g_default_contexts[i] );
@@ -1248,7 +1248,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool, _retag, ( dmheap_context_t* ctx, 
 
     // ptr may have been handed out by any default heap (see dmheap_malloc) - find
     // whichever one actually owns it.
-    for( size_t i = 0; i < g_default_context_count; i++ )
+    for( int32_t i = (g_default_context_count - 1); i >= 0; i-- )
     {
         retag_result_t result = retag_block_in_context( g_default_contexts[i], ptr, new_module_name );
         if( result == RETAG_OK )
@@ -1325,7 +1325,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool, _get_stats, ( dmheap_context_t* c
 
     // Aggregate across every default heap.
     Dmod_EnterCritical();
-    for( size_t i = 0; i < g_default_context_count; i++ )
+    for( int32_t i = (g_default_context_count - 1); i >= 0; i-- )
     {
         accumulate_stats_locked( g_default_contexts[i], out_stats );
     }
@@ -1352,7 +1352,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void, _for_each_free_block, ( dmheap_co
     }
 
     Dmod_EnterCritical();
-    for( size_t i = 0; i < g_default_context_count; i++ )
+    for( int32_t i = (g_default_context_count - 1); i >= 0; i-- )
     {
         for( block_t* block = g_default_contexts[i]->free_list; block != NULL; block = block->next )
         {
@@ -1381,7 +1381,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void, _for_each_used_block, ( dmheap_co
     }
 
     Dmod_EnterCritical();
-    for( size_t i = 0; i < g_default_context_count; i++ )
+    for( int32_t i = (g_default_context_count - 1); i >= 0; i-- )
     {
         for( block_t* block = g_default_contexts[i]->used_list; block != NULL; block = block->next )
         {
