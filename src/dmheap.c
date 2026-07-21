@@ -34,6 +34,7 @@ typedef struct dmheap_context_t
     block_t* used_list;     //!< Pointer to the list of used memory blocks.
     size_t alignment;       //!< Alignment for allocations.
     module_t* module_list; //!< Pointer to the list of registered modules.
+    char name[DMOD_MAX_MODULE_NAME_LENGTH]; //!< Optional name assigned via dmheap_set_context_name().
 } dmheap_context_t;
 
 /**
@@ -615,6 +616,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buff
     ctx->used_list  = NULL;
     ctx->alignment  = alignment;
     ctx->module_list = NULL;  // Reset module list on initialization
+    ctx->name[0] = '\0';      // No name assigned until dmheap_set_context_name() is called
 
     // The very first heap ever initialized becomes the default heap automatically.
     // Later heaps must be added explicitly via dmheap_add_default_context() /
@@ -628,6 +630,37 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buff
     DMOD_LOG_INFO("== dmheap ver. %s ==\n", DMHEAP_VERSION);
     DMOD_LOG_INFO("dmheap: Initialized with buffer %p of size %lu.\n", heap_buffer, (unsigned long)heap_size);
     return ctx;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _set_context_name, ( dmheap_context_t* ctx, const char* name ) )
+{
+    if( ctx == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: set_context_name called with NULL context.\n");
+        return false;
+    }
+
+    Dmod_EnterCritical();
+    if( name != NULL )
+    {
+        strncpy( ctx->name, name, sizeof(ctx->name) - 1 );
+        ctx->name[sizeof(ctx->name) - 1] = '\0';
+    }
+    else
+    {
+        ctx->name[0] = '\0';
+    }
+    Dmod_ExitCritical();
+    return true;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, const char*,  _get_context_name, ( dmheap_context_t* ctx ) )
+{
+    if( ctx == NULL )
+    {
+        ctx = g_default_context_count > 0 ? g_default_contexts[0] : NULL;
+    }
+    return ctx != NULL ? ctx->name : "";
 }
 
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _set_default_context, ( dmheap_context_t* ctx ) )
@@ -670,6 +703,28 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, size_t,  _get_default_context_count, ( 
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _get_default_context_at, ( size_t index ) )
 {
     return index < g_default_context_count ? g_default_contexts[index] : NULL;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _get_context_by_name, ( const char* name ) )
+{
+    if( name == NULL )
+    {
+        return NULL;
+    }
+
+    dmheap_context_t* found = NULL;
+    Dmod_EnterCritical();
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        if( g_default_contexts[i]->name[0] != '\0' &&
+            strncmp( g_default_contexts[i]->name, name, DMOD_MAX_MODULE_NAME_LENGTH ) == 0 )
+        {
+            found = g_default_contexts[i];
+            break;
+        }
+    }
+    Dmod_ExitCritical();
+    return found;
 }
 
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _is_initialized, ( dmheap_context_t* ctx ) )

@@ -19,6 +19,30 @@ typedef struct dmheap_context_t dmheap_context_t;
  */
 DMOD_BUILTIN_API( dmheap, 1.0, dmheap_context_t*, _init, ( void* buffer, size_t size, size_t alignment ) );
 /**
+ * @brief Assign a name to a heap context.
+ *
+ * Naming a context makes it discoverable later via dmheap_get_context_by_name(),
+ * which is useful when the pointer returned by dmheap_init() wasn't kept around
+ * (e.g. a module looking up a heap another module set up). Only contexts that
+ * have also been added to the default heap list (see dmheap_add_default_context())
+ * can be found by name - naming a context does not by itself register it there.
+ *
+ * @param ctx  Pointer to the heap context.
+ * @param name Name to assign to the context, or NULL to clear it. Truncated to
+ *             DMOD_MAX_MODULE_NAME_LENGTH - 1 characters if longer.
+ *
+ * @return true on success, false if ctx is NULL.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, bool             , _set_context_name, ( dmheap_context_t* ctx, const char* name ) );
+/**
+ * @brief Get the name previously assigned to a heap context.
+ *
+ * @param ctx Pointer to the heap context (NULL to use the primary default context).
+ *
+ * @return The context's name, or an empty string if none was set or no context is available.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, const char*      , _get_context_name, ( dmheap_context_t* ctx ) );
+/**
  * @brief Replace the list of default heap contexts with a single entry.
  *
  * Used when NULL is passed as the context to API functions. This clears any
@@ -84,6 +108,18 @@ DMOD_BUILTIN_API( dmheap, 1.0, size_t           , _get_default_context_count, ( 
  *         of range.
  */
 DMOD_BUILTIN_API( dmheap, 1.0, dmheap_context_t*, _get_default_context_at, ( size_t index ) );
+/**
+ * @brief Find a default heap by its name.
+ *
+ * Searches the default heap list (see dmheap_add_default_context()) for a context
+ * previously named via dmheap_set_context_name(). A heap that was never added to
+ * the default list cannot be found this way, even if it was named.
+ *
+ * @param name Name to search for.
+ *
+ * @return Pointer to the matching heap context, or NULL if none was found.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, dmheap_context_t*, _get_context_by_name, ( const char* name ) );
 /**
  * @brief Check if the heap is initialized.
  * 

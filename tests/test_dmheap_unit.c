@@ -554,6 +554,48 @@ static void test_default_heap_list(void) {
     TEST_INFO("Default heap list test completed");
 }
 
+// Test: Named contexts
+static void test_context_naming(void) {
+    TEST_SECTION("Context Naming");
+    reset_heap(); // test_heap is now the sole default heap
+
+    ASSERT_TEST(strcmp(dmheap_get_context_name(NULL), "") == 0, "Unnamed default context has empty name");
+    ASSERT_TEST(dmheap_get_context_by_name("kernel") == NULL, "Lookup before naming fails");
+
+    ASSERT_TEST(dmheap_set_context_name(NULL, "kernel") == false, "Naming a NULL context fails");
+
+    dmheap_context_t* primary = dmheap_get_default_context_at(0);
+    ASSERT_TEST(dmheap_set_context_name(primary, "kernel") == true, "Name the primary heap");
+    ASSERT_TEST(strcmp(dmheap_get_context_name(primary), "kernel") == 0, "Name is readable back via explicit context");
+    ASSERT_TEST(strcmp(dmheap_get_context_name(NULL), "kernel") == 0, "Name is readable back via NULL (primary default) context");
+    ASSERT_TEST(dmheap_get_context_by_name("kernel") == primary, "Lookup by name finds the heap");
+    ASSERT_TEST(dmheap_get_context_by_name("unknown") == NULL, "Lookup with unknown name fails");
+
+    #define NAMED_EXTRA_HEAP_SIZE (4 * 1024)
+    static char named_extra_heap[NAMED_EXTRA_HEAP_SIZE];
+    dmheap_context_t* extra = dmheap_init(named_extra_heap, NAMED_EXTRA_HEAP_SIZE, 8);
+    ASSERT_TEST(extra != NULL, "Initialize extra heap");
+    ASSERT_TEST(dmheap_set_context_name(extra, "extram") == true, "Name the extra heap");
+
+    // Naming alone does not register the heap in the default list.
+    ASSERT_TEST(dmheap_get_context_by_name("extram") == NULL, "Lookup fails before extra heap joins the default list");
+    ASSERT_TEST(dmheap_add_default_context(extra) == true, "Add extra heap to default list");
+    ASSERT_TEST(dmheap_get_context_by_name("extram") == extra, "Lookup succeeds once extra heap is in the default list");
+    ASSERT_TEST(dmheap_get_context_by_name("kernel") == primary, "Lookup for the first heap still works");
+
+    // Renaming/clearing.
+    ASSERT_TEST(dmheap_set_context_name(extra, "extram2") == true, "Rename the extra heap");
+    ASSERT_TEST(dmheap_get_context_by_name("extram") == NULL, "Old name no longer resolves");
+    ASSERT_TEST(dmheap_get_context_by_name("extram2") == extra, "New name resolves");
+    ASSERT_TEST(dmheap_set_context_name(extra, NULL) == true, "Clear the extra heap's name");
+    ASSERT_TEST(strcmp(dmheap_get_context_name(extra), "") == 0, "Cleared name reads back empty");
+    ASSERT_TEST(dmheap_get_context_by_name("extram2") == NULL, "Cleared name no longer resolves");
+
+    ASSERT_TEST(dmheap_remove_default_context(extra) == true, "Remove extra heap from default list");
+
+    TEST_INFO("Context naming test completed");
+}
+
 // Performance benchmark
 static void benchmark_allocations(void) {
     TEST_SECTION("Performance Benchmark");
@@ -666,6 +708,7 @@ int main(void) {
     test_fragmentation();
     test_multiple_contexts();
     test_default_heap_list();
+    test_context_naming();
     benchmark_allocations();
     
     // Print summary

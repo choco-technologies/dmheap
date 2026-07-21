@@ -585,6 +585,47 @@ Initialize the heap with a given buffer and size. The context structure is store
 - **Thread-safe:** Yes
 - **Note:** The first initialized context automatically becomes the default context
 
+#### `dmheap_set_context_name`
+
+```c
+bool dmheap_set_context_name(dmheap_context_t* ctx, const char* name);
+```
+
+Assign a name to a heap context so it can be looked up later with `dmheap_get_context_by_name`.
+
+- **Parameters:**
+  - `ctx`: Pointer to the heap context (must not be `NULL`)
+  - `name`: Name to assign (max length: `DMOD_MAX_MODULE_NAME_LENGTH`), or `NULL` to clear it
+- **Returns:** `true` on success, `false` if `ctx` is `NULL`
+- **Thread-safe:** Yes
+- **Note:** Naming a context does not add it to the default heap list - use `dmheap_add_default_context` for that. Only contexts in the default list can be found by name.
+
+#### `dmheap_get_context_name`
+
+```c
+const char* dmheap_get_context_name(dmheap_context_t* ctx);
+```
+
+Get the name previously assigned to a heap context.
+
+- **Parameters:**
+  - `ctx`: Pointer to the heap context (`NULL` to use the primary default context)
+- **Returns:** The context's name, or an empty string if none was set
+- **Thread-safe:** Yes
+
+#### `dmheap_get_context_by_name`
+
+```c
+dmheap_context_t* dmheap_get_context_by_name(const char* name);
+```
+
+Find a heap context by name among the default heap list.
+
+- **Parameters:**
+  - `name`: Name previously assigned via `dmheap_set_context_name`
+- **Returns:** Pointer to the matching heap context, or `NULL` if not found
+- **Thread-safe:** Yes
+
 #### `dmheap_set_default_context`
 
 ```c
