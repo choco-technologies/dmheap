@@ -18,7 +18,7 @@ memory [options]
 
 | Option | Description |
 |---|---|
-| `-s`, `--stats` | Print overall heap statistics: total size, free space, block count (free/used), largest and smallest free block, and a fragmentation percentage (`(Free - LargestFree) / Free * 100`, the share of free memory outside the single largest free block). |
+| `-s`, `--stats` | Print overall heap statistics: total size, free space, used space, usage percentage (`Used / TotalSize * 100`), block count (free/used), largest and smallest free block, and a fragmentation percentage (`(Free - LargestFree) / Free * 100`, the share of free memory outside the single largest free block). Finishes with a VT100 usage bar per heap plus the combined total. |
 | `-m`, `--modules` | Print a summary of every module that has allocated memory, including untracked (`(null)`) allocations, with block count and total bytes per module. |
 | `-f`, `--fragmentation` | Print a histogram of free block sizes: for each distinct block size, how many blocks of that size exist and how many bytes they add up to. |
 | `-h`, `--help` | Show usage information. |
@@ -35,7 +35,10 @@ not a single fixed heap:
 - `--stats` prints each default heap's statistics individually (`Heap #0`,
   `Heap #1`, ...) followed by a combined `Total (all heaps)` section, when
   more than one heap is registered as a default heap. With only one default
-  heap, it prints the original unlabeled `Heap statistics:` output.
+  heap, it prints the original unlabeled `Heap statistics:` output. A heap
+  named via `dmheap_set_context_name()` (see [dmheap.md](../../../docs/dmheap.md))
+  is shown as `Heap #N (name)` instead of a bare index, and that name is
+  reused as the label on its VT100 usage bar.
 - `--modules` and `--fragmentation` walk every default heap's blocks and
   report the combined totals, since a module's allocations may be spread
   across more than one of them.
@@ -59,6 +62,41 @@ not a single fixed heap:
 
 - `0` - Success
 - `-EINVAL` - Unknown option
+
+## Sample `--stats` output
+
+With two named default heaps (`sensors`, `network`):
+
+```
+Heap statistics (2 heaps):
+Heap #0 (sensors):
+  Total size:     16384 bytes
+  Free:           6144 bytes
+  Used:           10240 bytes
+  Usage:          62.5%
+  Blocks:         5 (2 free, 3 used)
+  Largest free:   4096 bytes
+  Smallest free:  2048 bytes
+  Fragmentation:  33.3%
+Heap #1 (network):
+  Total size:     8192 bytes
+  Free:           7372 bytes
+  Used:           820 bytes
+  Usage:          10.0%
+  ...
+Total (all heaps):
+  Total size:     24576 bytes
+  ...
+  Usage:          45.0%
+  ...
+
+  sensors                  [##########################--------------] 62.5%
+  network                  [####------------------------------------] 10.0%
+  Total                    [##################----------------------] 45.0%
+```
+
+The bars are colored green below 70% usage, yellow from 70-90%, and red above
+90%.
 
 ## Examples
 

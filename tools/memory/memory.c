@@ -21,11 +21,24 @@ static void print_usage( void )
     Dmod_Printf("If more than one heap was registered as a default heap (see\n");
     Dmod_Printf("dmheap_add_default_context()), --stats reports each heap individually plus\n");
     Dmod_Printf("a combined total, and --modules/--fragmentation report combined across all of them.\n");
+    Dmod_Printf("Heaps named via dmheap_set_context_name() are shown by name; --stats also\n");
+    Dmod_Printf("prints a used/total percentage per heap and a VT100 usage bar for each of\n");
+    Dmod_Printf("them plus the combined total.\n");
 }
 
 // ============================================================================
 //                              --stats
 // ============================================================================
+
+// Share of the heap's total size currently handed out to allocations.
+static double usage_percent( const dmheap_stats_t* stats )
+{
+    if( stats->heap_size == 0 )
+    {
+        return 0.0;
+    }
+    return ( (double)stats->used_bytes / (double)stats->heap_size ) * 100.0;
+}
 
 static void print_one_heap_stats( const dmheap_stats_t* stats )
 {
@@ -42,11 +55,73 @@ static void print_one_heap_stats( const dmheap_stats_t* stats )
     Dmod_Printf("  Total size:     %zu bytes\n", stats->heap_size);
     Dmod_Printf("  Free:           %zu bytes\n", stats->free_bytes);
     Dmod_Printf("  Used:           %zu bytes\n", stats->used_bytes);
+    Dmod_Printf("  Usage:          %.1f%%\n", usage_percent(stats));
     Dmod_Printf("  Blocks:         %zu (%zu free, %zu used)\n",
         total_block_count, stats->free_block_count, stats->used_block_count);
     Dmod_Printf("  Largest free:   %zu bytes\n", stats->largest_free_block);
     Dmod_Printf("  Smallest free:  %zu bytes\n", stats->smallest_free_block);
     Dmod_Printf("  Fragmentation:  %.1f%%\n", fragmentation_percent);
+}
+
+// ============================================================================
+//                              VT100 usage bar
+// ============================================================================
+
+#define USAGE_BAR_WIDTH 40
+
+// Green below 70%, yellow up to 90%, red beyond that - a quick visual cue for
+// heaps that are getting dangerously full.
+static const char* usage_bar_color( double percent )
+{
+    if( percent >= 90.0 )
+    {
+        return "\033[31;1m"; // red
+    }
+    else if( percent >= 70.0 )
+    {
+        return "\033[33;1m"; // yellow
+    }
+    return "\033[32;1m"; // green
+}
+
+static void print_usage_bar( const char* label, double percent )
+{
+    if( percent < 0.0 )
+    {
+        percent = 0.0;
+    }
+    else if( percent > 100.0 )
+    {
+        percent = 100.0;
+    }
+
+    size_t filled = (size_t)( ( percent / 100.0 ) * USAGE_BAR_WIDTH + 0.5 );
+    if( filled > USAGE_BAR_WIDTH )
+    {
+        filled = USAGE_BAR_WIDTH;
+    }
+
+    char bar[USAGE_BAR_WIDTH + 1];
+    memset( bar, '-', USAGE_BAR_WIDTH );
+    memset( bar, '#', filled );
+    bar[USAGE_BAR_WIDTH] = '\0';
+
+    Dmod_Printf("  %-24s [%s%s\033[0m] %5.1f%%\n", label, usage_bar_color(percent), bar, percent);
+}
+
+// Prints "Heap #<index>" or, if the context was named via dmheap_set_context_name(),
+// "Heap #<index> (<name>)".
+static void print_heap_label( size_t index, dmheap_context_t* ctx )
+{
+    const char* name = dmheap_get_context_name( ctx );
+    if( name != NULL && name[0] != '\0' )
+    {
+        Dmod_Printf("Heap #%zu (%s):\n", index, name);
+    }
+    else
+    {
+        Dmod_Printf("Heap #%zu:\n", index);
+    }
 }
 
 static void print_stats( void )
@@ -61,14 +136,25 @@ static void print_stats( void )
     // A single default heap: keep the original, unlabeled output.
     if( heap_count == 1 )
     {
+        dmheap_context_t* ctx = dmheap_get_default_context_at(0);
         dmheap_stats_t stats;
-        if( !dmheap_get_stats( dmheap_get_default_context_at(0), &stats ) )
+        if( !dmheap_get_stats( ctx, &stats ) )
         {
             DMOD_LOG_ERROR("Failed to read heap statistics\n");
             return;
         }
-        Dmod_Printf("Heap statistics:\n");
+        const char* name = dmheap_get_context_name( ctx );
+        if( name != NULL && name[0] != '\0' )
+        {
+            Dmod_Printf("Heap statistics (%s):\n", name);
+        }
+        else
+        {
+            Dmod_Printf("Heap statistics:\n");
+        }
         print_one_heap_stats( &stats );
+        Dmod_Printf("\n");
+        print_usage_bar( name != NULL && name[0] != '\0' ? name : "Heap", usage_percent(&stats) );
         return;
     }
 
@@ -76,21 +162,41 @@ static void print_stats( void )
     Dmod_Printf("Heap statistics (%zu heaps):\n", heap_count);
     for( size_t i = 0; i < heap_count; i++ )
     {
+        dmheap_context_t* ctx = dmheap_get_default_context_at(i);
         dmheap_stats_t stats;
-        if( !dmheap_get_stats( dmheap_get_default_context_at(i), &stats ) )
+        if( !dmheap_get_stats( ctx, &stats ) )
         {
             DMOD_LOG_ERROR("Failed to read statistics for heap #%zu\n", i);
             continue;
         }
-        Dmod_Printf("Heap #%zu:\n", i);
+        print_heap_label( i, ctx );
         print_one_heap_stats( &stats );
     }
 
     dmheap_stats_t total;
-    if( dmheap_get_stats( NULL, &total ) )
+    bool have_total = dmheap_get_stats( NULL, &total );
+    if( have_total )
     {
         Dmod_Printf("Total (all heaps):\n");
         print_one_heap_stats( &total );
+    }
+
+    // Visual overview: one usage bar per heap, followed by the combined total.
+    Dmod_Printf("\n");
+    for( size_t i = 0; i < heap_count; i++ )
+    {
+        dmheap_context_t* ctx = dmheap_get_default_context_at(i);
+        dmheap_stats_t stats;
+        if( !dmheap_get_stats( ctx, &stats ) )
+        {
+            continue;
+        }
+        const char* name = dmheap_get_context_name( ctx );
+        print_usage_bar( name != NULL && name[0] != '\0' ? name : "Heap", usage_percent(&stats) );
+    }
+    if( have_total )
+    {
+        print_usage_bar( "Total", usage_percent(&total) );
     }
 }
 
