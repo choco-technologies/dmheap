@@ -618,13 +618,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buff
     ctx->module_list = NULL;  // Reset module list on initialization
     ctx->name[0] = '\0';      // No name assigned until dmheap_set_context_name() is called
 
-    // The very first heap ever initialized becomes the default heap automatically.
-    // Later heaps must be added explicitly via dmheap_add_default_context() /
-    // dmheap_set_default_context().
-    if(g_default_context_count == 0)
-    {
-        add_default_context_locked( ctx );
-    }
+    add_default_context_locked( ctx );
 
     Dmod_ExitCritical();
     DMOD_LOG_INFO("== dmheap ver. %s ==\n", DMHEAP_VERSION);
