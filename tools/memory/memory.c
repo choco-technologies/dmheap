@@ -69,6 +69,13 @@ static void print_one_heap_stats( const dmheap_stats_t* stats )
 
 #define USAGE_BAR_WIDTH 40
 
+// Same block glyphs as DMOD_LOG_STEP_PROGRESS (see Dmod_GetStepBar): each cell
+// is a 3-byte UTF-8 sequence, so the bar can't just be memset() like a plain
+// char string - it has to be assembled cell by cell.
+#define USAGE_BAR_CELL_FULL  "\xe2\x96\x88" // █
+#define USAGE_BAR_CELL_EMPTY "\xe2\x96\x91" // ░
+#define USAGE_BAR_CELL_BYTES 3
+
 // Green below 70%, yellow up to 90%, red beyond that - a quick visual cue for
 // heaps that are getting dangerously full.
 static const char* usage_bar_color( double percent )
@@ -101,10 +108,17 @@ static void print_usage_bar( const char* label, double percent )
         filled = USAGE_BAR_WIDTH;
     }
 
-    char bar[USAGE_BAR_WIDTH + 1];
-    memset( bar, '-', USAGE_BAR_WIDTH );
-    memset( bar, '#', filled );
-    bar[USAGE_BAR_WIDTH] = '\0';
+    char bar[USAGE_BAR_WIDTH * USAGE_BAR_CELL_BYTES + 1];
+    size_t i = 0;
+    for( ; i < filled; i++ )
+    {
+        memcpy( bar + i * USAGE_BAR_CELL_BYTES, USAGE_BAR_CELL_FULL, USAGE_BAR_CELL_BYTES );
+    }
+    for( ; i < USAGE_BAR_WIDTH; i++ )
+    {
+        memcpy( bar + i * USAGE_BAR_CELL_BYTES, USAGE_BAR_CELL_EMPTY, USAGE_BAR_CELL_BYTES );
+    }
+    bar[USAGE_BAR_WIDTH * USAGE_BAR_CELL_BYTES] = '\0';
 
     Dmod_Printf("  %-24s [%s%s\033[0m] %5.1f%%\n", label, usage_bar_color(percent), bar, percent);
 }
