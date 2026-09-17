@@ -1555,4 +1555,9 @@ DMOD_INPUT_API_DECLARATION(Dmod, 1.0, bool, _RetagEx, ( void* Ptr, const char* M
 {
     return dmheap_retag( NULL, Ptr, ModuleName );
 }
+
+DMOD_INPUT_API_DECLARATION(Dmod, 1.0, bool, _RenameTag, ( const char* OldTag, const char* NewTag ))
+{
+    return dmheap_rename_tag( NULL, OldTag, NewTag );
+}
 #endif // DMHEAP_DONT_IMPLEMENT_DMOD_API
