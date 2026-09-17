@@ -209,6 +209,25 @@ DMOD_BUILTIN_API( dmheap, 1.0, void             , _concatenate_free_blocks, ( dm
 DMOD_BUILTIN_API( dmheap, 1.0, bool             , _retag, ( dmheap_context_t* ctx, void* ptr, const char* new_module_name ) );
 
 /**
+ * @brief Rename a module, moving every allocation currently attributed to it over to
+ * another (possibly new) module.
+ *
+ * Unlike _retag, which moves a single pointer, this moves every block owned by
+ * old_module_name in one call - e.g. when a module is renamed and its historical
+ * allocations should be reported under the new name. If old_module_name is not
+ * registered, this is a no-op success. Creates the target module if it is not
+ * already registered. If new_module_name is already registered, the two modules
+ * are merged.
+ *
+ * @param ctx               Pointer to the heap context (NULL to use default context).
+ * @param old_module_name   Name of the module whose allocations should be moved.
+ * @param new_module_name   Name of the module to attribute those allocations to from now on.
+ *
+ * @return true if the rename/merge succeeded (or there was nothing to rename), false otherwise.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, bool             , _rename_tag, ( dmheap_context_t* ctx, const char* old_module_name, const char* new_module_name ) );
+
+/**
  * @brief Aggregate statistics about the heap's current state.
  */
 typedef struct dmheap_stats_t

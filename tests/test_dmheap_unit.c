@@ -372,6 +372,79 @@ static void test_module_reregister_stale_owner(void) {
     printf("[INFO] Module re-registration stale owner test completed\n");
 }
 
+// Helper visitor for test_rename_tag: counts used blocks owned by a given module name.
+typedef struct {
+    const char* name;
+    int count;
+} count_owner_t;
+
+static void count_owner_visitor(void* address, size_t size, const char* owner_name, void* user_data) {
+    (void)address;
+    (void)size;
+    count_owner_t* ctx = (count_owner_t*)user_data;
+    if (owner_name != NULL && strcmp(owner_name, ctx->name) == 0) {
+        ctx->count++;
+    }
+}
+
+static int count_blocks_owned_by(const char* name) {
+    count_owner_t ctx = { name, 0 };
+    dmheap_for_each_used_block(NULL, count_owner_visitor, &ctx);
+    return ctx.count;
+}
+
+// Test: Rename tag - move all allocations from one module to another
+static void test_rename_tag(void) {
+    printf("\n=== Testing Rename Tag ===\n");
+    reset_heap();
+
+    // Invalid arguments should fail.
+    ASSERT_TEST(dmheap_rename_tag(NULL, NULL, "new") == false, "Rename with NULL old name fails");
+    ASSERT_TEST(dmheap_rename_tag(NULL, "old", NULL) == false, "Rename with NULL new name fails");
+    ASSERT_TEST(dmheap_rename_tag(NULL, "", "new") == false, "Rename with empty old name fails");
+    ASSERT_TEST(dmheap_rename_tag(NULL, "old", "") == false, "Rename with empty new name fails");
+
+    // Renaming a module that was never registered is a no-op success.
+    ASSERT_TEST(dmheap_rename_tag(NULL, "never_registered", "new") == true,
+                "Rename of unknown module is a no-op success");
+
+    // Basic rename: everything tagged "old" should end up tagged "renamed".
+    dmheap_register_module(NULL, "old");
+    void* ptr1 = dmheap_malloc(NULL, 64, "old");
+    void* ptr2 = dmheap_malloc(NULL, 128, "old");
+    ASSERT_TEST(ptr1 != NULL && ptr2 != NULL, "Allocate two blocks for 'old' module");
+    ASSERT_TEST(count_blocks_owned_by("old") == 2, "Both blocks initially owned by 'old'");
+
+    bool result = dmheap_rename_tag(NULL, "old", "renamed");
+    ASSERT_TEST(result == true, "Rename 'old' to 'renamed' succeeds");
+    ASSERT_TEST(count_blocks_owned_by("old") == 0, "No blocks remain owned by 'old'");
+    ASSERT_TEST(count_blocks_owned_by("renamed") == 2, "Both blocks now owned by 'renamed'");
+
+    // The renamed data should still be intact and usable.
+    memset(ptr1, 0xAB, 64);
+    ASSERT_TEST(((unsigned char*)ptr1)[0] == 0xAB, "Data in renamed block is still valid");
+
+    // A new allocation under the old name should re-create it independently.
+    dmheap_register_module(NULL, "old");
+    void* ptr3 = dmheap_malloc(NULL, 32, "old");
+    ASSERT_TEST(ptr3 != NULL, "Allocate again under 'old' after renaming away from it");
+    ASSERT_TEST(count_blocks_owned_by("old") == 1, "New 'old' allocation is independent of 'renamed'");
+    ASSERT_TEST(count_blocks_owned_by("renamed") == 2, "'renamed' still holds the original two blocks");
+
+    // Merge case: renaming into an already-registered module should combine allocations.
+    result = dmheap_rename_tag(NULL, "old", "renamed");
+    ASSERT_TEST(result == true, "Rename into an already-existing module (merge) succeeds");
+    ASSERT_TEST(count_blocks_owned_by("old") == 0, "No blocks remain owned by 'old' after merge");
+    ASSERT_TEST(count_blocks_owned_by("renamed") == 3, "'renamed' now holds all three blocks after merge");
+
+    dmheap_free(NULL, ptr1, false);
+    dmheap_free(NULL, ptr2, false);
+    dmheap_free(NULL, ptr3, false);
+    dmheap_unregister_module(NULL, "renamed");
+
+    printf("[INFO] Rename tag test completed\n");
+}
+
 // Test: Edge cases
 static void test_edge_cases(void) {
     printf("\n=== Testing Edge Cases ===\n");
@@ -704,6 +777,7 @@ int main(void) {
     test_stress_allocations();
     test_module_cleanup();
     test_module_reregister_stale_owner();
+    test_rename_tag();
     // test_edge_cases();  // TODO: Temporarily disabled - double free triggers assertion
     test_fragmentation();
     test_multiple_contexts();

@@ -1317,6 +1317,91 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool, _retag, ( dmheap_context_t* ctx, 
 }
 
 /**
+ * @brief Rename a module (if present) on a single, already-resolved heap context,
+ *        moving every block it owns over to the (possibly newly-created) target module.
+ *
+ * @param ctx             Pointer to the heap context (must not be NULL).
+ * @param old_module_name Name of the module whose allocations should be moved.
+ * @param new_module_name Name of the module to attribute those allocations to from now on.
+ *
+ * @return true if the rename/merge succeeded (or old_module_name was not registered),
+ *         false if the target module could not be created.
+ */
+static bool rename_tag_in_context( dmheap_context_t* ctx, const char* old_module_name, const char* new_module_name )
+{
+    Dmod_EnterCritical();
+
+    module_t* old_module = find_module_by_name( ctx, old_module_name );
+    if( old_module == NULL )
+    {
+        // Nothing is tagged with old_module_name - nothing to rename.
+        Dmod_ExitCritical();
+        return true;
+    }
+
+    module_t* new_module = get_or_create_module( ctx, new_module_name );
+    if( new_module == NULL )
+    {
+        Dmod_ExitCritical();
+        return false;
+    }
+
+    if( new_module != old_module )
+    {
+        for( block_t* block = ctx->used_list; block != NULL; block = block->next )
+        {
+            if( block->owner == old_module )
+            {
+                block->owner = new_module;
+            }
+        }
+
+        remove_module_from_list( &ctx->module_list, old_module );
+        block_t* module_block = find_block_by_address( ctx, (void*)old_module );
+        if( module_block != NULL )
+        {
+            remove_block( &ctx->used_list, module_block );
+            add_free_block( &ctx->free_list, module_block );
+        }
+    }
+
+    Dmod_ExitCritical();
+    return true;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool, _rename_tag, ( dmheap_context_t* ctx, const char* old_module_name, const char* new_module_name ) )
+{
+    if( old_module_name == NULL || new_module_name == NULL || strlen(old_module_name) == 0 || strlen(new_module_name) == 0 )
+    {
+        DMOD_LOG_ERROR("dmheap: rename_tag called with invalid arguments.\n");
+        return false;
+    }
+
+    if( ctx != NULL )
+    {
+        return rename_tag_in_context( ctx, old_module_name, new_module_name );
+    }
+
+    if( g_default_context_count == 0 )
+    {
+        DMOD_LOG_ERROR("dmheap: No context available for rename_tag.\n");
+        return false;
+    }
+
+    // A NULL context renames the module on every default heap, since allocations
+    // tagged with old_module_name may have landed on any of them (see dmheap_malloc).
+    bool all_succeeded = true;
+    for( size_t i = 0; i < g_default_context_count; i++ )
+    {
+        if( !rename_tag_in_context( g_default_contexts[i], old_module_name, new_module_name ) )
+        {
+            all_succeeded = false;
+        }
+    }
+    return all_succeeded;
+}
+
+/**
  * @brief Accumulate one heap context's statistics into a running total. Caller
  * must already hold the heap's critical section.
  *

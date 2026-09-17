@@ -8,7 +8,7 @@
 #       
 # ##############################################################################
 ifeq ($(DMOD_DIR),)
-    DMOD_DIR = build/_deps/dmod-src
+    DMOD_DIR = ../../../../..$(DMOD_DIR)
 endif
 
 #
@@ -18,7 +18,7 @@ DMOD_LIB_NAME=libdmheap.a
 DMOD_SOURCES=src/dmheap.c
 DMOD_INC_DIRS = include\
 		$(DMOD_DIR)/inc\
-		build/_deps/dmod-build
+		../../../../../tmp/dmheap_test_build/_deps/dmod-build
 DMOD_LIBS = dmod_inc
 DMOD_GEN_HEADERS_IN = 
 DMOD_DEFINITIONS = $<$<BOOL:OFF>:DMHEAP_DONT_IMPLEMENT_DMOD_API>;DMHEAP_VERSION="1.0"
