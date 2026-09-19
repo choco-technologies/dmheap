@@ -10,6 +10,7 @@ enable_testing()
 #               Test: Unit Tests
 # =====================================================================
 add_executable(test_dmheap_unit test_dmheap_unit.c dmod_stubs.c)
+dmod_set_current_allocator(test_dmheap_unit)
 target_link_libraries(test_dmheap_unit 
     PRIVATE 
         dmheap
@@ -30,6 +31,7 @@ target_include_directories(test_dmheap_unit
 #               Test: Module Tests
 # =====================================================================
 add_executable(test_dmheap_module test_dmheap_module.c dmod_stubs.c)
+dmod_set_current_allocator(test_dmheap_module)
 target_link_libraries(test_dmheap_module 
     PRIVATE 
         dmheap
@@ -50,6 +52,7 @@ target_include_directories(test_dmheap_module
 #               Test: Simple Test
 # =====================================================================
 add_executable(test_simple test_simple.c dmod_stubs.c)
+dmod_set_current_allocator(test_simple)
 target_link_libraries(test_simple 
     PRIVATE 
         dmheap
