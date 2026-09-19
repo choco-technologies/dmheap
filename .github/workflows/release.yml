@@ -253,6 +253,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
+
+          # uploads.github.com occasionally returns a transient 5xx (e.g.
+          # "Error creating asset temp dir") even though the asset itself is
+          # fine - retry with backoff instead of failing the whole release.
+          upload_with_retry() {
+            local tag="$1"
+            local file="$2"
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              if gh release upload "$tag" "$file" --repo "${{ github.repository }}" --clobber; then
+                return 0
+              fi
+              echo "Upload of $file to $tag failed (attempt $attempt/5)"
+              if [ "$attempt" -lt 5 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            echo "Error: giving up uploading $file to $tag after 5 attempts"
+            return 1
+          }
+
           # Upload all release archives to the GitHub release
           shopt -s nullglob
           zip_files=(artifacts/release-*/*.zip artifacts/memory-release-*/*.zip)
@@ -261,33 +282,24 @@ jobs:
             echo "Error: No artifacts found to upload"
             exit 1
           fi
-          
+
           for zip_file in "${zip_files[@]}"; do
             echo "Uploading $zip_file to ${{ github.event.release.tag_name }}..."
-            gh release upload ${{ github.event.release.tag_name }} \
-              "$zip_file" \
-              --repo ${{ github.repository }} \
-              --clobber
+            upload_with_retry "${{ github.event.release.tag_name }}" "$zip_file"
           done
-          
+
           # Upload versions.dmm to the versioned release
           if [ -f artifacts/versions-manifest/versions.dmm ]; then
             echo "Uploading versions.dmm to ${{ github.event.release.tag_name }}..."
-            gh release upload ${{ github.event.release.tag_name }} \
-              artifacts/versions-manifest/versions.dmm \
-              --repo ${{ github.repository }} \
-              --clobber
+            upload_with_retry "${{ github.event.release.tag_name }}" artifacts/versions-manifest/versions.dmm
           fi
-          
+
           # Upload manifest.dmm to the versioned release
           if [ -f artifacts/versions-manifest/manifest.dmm ]; then
             echo "Uploading manifest.dmm to ${{ github.event.release.tag_name }}..."
-            gh release upload ${{ github.event.release.tag_name }} \
-              artifacts/versions-manifest/manifest.dmm \
-              --repo ${{ github.repository }} \
-              --clobber
+            upload_with_retry "${{ github.event.release.tag_name }}" artifacts/versions-manifest/manifest.dmm
           fi
-          
+
           echo "Successfully uploaded ${#zip_files[@]} artifact(s) to ${{ github.event.release.tag_name }}"
       
       - name: Create or update latest release
@@ -316,33 +328,45 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
+
+          # uploads.github.com occasionally returns a transient 5xx (e.g.
+          # "Error creating asset temp dir") even though the asset itself is
+          # fine - retry with backoff instead of failing the whole release.
+          upload_with_retry() {
+            local tag="$1"
+            local file="$2"
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              if gh release upload "$tag" "$file" --repo "${{ github.repository }}" --clobber; then
+                return 0
+              fi
+              echo "Upload of $file to $tag failed (attempt $attempt/5)"
+              if [ "$attempt" -lt 5 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            echo "Error: giving up uploading $file to $tag after 5 attempts"
+            return 1
+          }
+
           shopt -s nullglob
           zip_files=(artifacts/release-*/*.zip artifacts/memory-release-*/*.zip)
 
           for zip_file in "${zip_files[@]}"; do
             echo "Uploading $zip_file to vlatest..."
-            gh release upload vlatest \
-              "$zip_file" \
-              --repo ${{ github.repository }} \
-              --clobber
+            upload_with_retry vlatest "$zip_file"
           done
-          
+
           # Upload versions.dmm to the latest release
           if [ -f artifacts/versions-manifest/versions.dmm ]; then
             echo "Uploading versions.dmm to vlatest..."
-            gh release upload vlatest \
-              artifacts/versions-manifest/versions.dmm \
-              --repo ${{ github.repository }} \
-              --clobber
+            upload_with_retry vlatest artifacts/versions-manifest/versions.dmm
           fi
-          
+
           # Upload manifest.dmm to the latest release
           if [ -f artifacts/versions-manifest/manifest.dmm ]; then
             echo "Uploading manifest.dmm to vlatest..."
-            gh release upload vlatest \
-              artifacts/versions-manifest/manifest.dmm \
-              --repo ${{ github.repository }} \
-              --clobber
+            upload_with_retry vlatest artifacts/versions-manifest/manifest.dmm
           fi
-          
+
           echo "Successfully uploaded ${#zip_files[@]} artifact(s) to vlatest"
