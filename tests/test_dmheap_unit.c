@@ -231,6 +231,43 @@ static void test_free_and_concatenate(void) {
     printf("[INFO] Called concatenate_free_blocks\n");
 }
 
+// Test: Concatenation merges a block with its physical upper neighbour even when
+// the lower block is the larger one - i.e. comes *later* in the size-sorted free list
+static void test_concatenate_larger_lower_block(void) {
+    TEST_SECTION("Concatenate Larger Lower Block");
+
+    #define CONCAT_HEAP_SIZE 4096
+    static char heap[CONCAT_HEAP_SIZE];
+    dmheap_context_t* ctx = dmheap_init(heap, CONCAT_HEAP_SIZE, 8);
+    ASSERT_TEST(ctx != NULL, "Initialize heap");
+
+    // Register up front - otherwise the first allocation places the module's own
+    // bookkeeping between `lower` and `upper`, and they are no longer neighbours
+    ASSERT_TEST(dmheap_register_module(ctx, "test"), "Register module");
+
+    void* lower = dmheap_malloc(ctx, 256, "test");
+    void* upper = dmheap_malloc(ctx, 64, "test");
+    ASSERT_TEST(lower != NULL && upper != NULL, "Allocate lower (large) and upper (small) blocks");
+    ASSERT_TEST((char*)lower < (char*)upper, "Lower block sits below the upper one");
+
+    // Take the rest of the heap, so the merged pair is the only place left to allocate from
+    dmheap_stats_t stats;
+    dmheap_get_stats(ctx, &stats);
+    void* filler = dmheap_malloc(ctx, stats.free_bytes - 8, "filler");
+    ASSERT_TEST(filler != NULL, "Fill the rest of the heap");
+
+    dmheap_free(ctx, lower, false);
+    dmheap_free(ctx, upper, false);
+
+    dmheap_concatenate_free_blocks(ctx);
+    dmheap_get_stats(ctx, &stats);
+    ASSERT_TEST(stats.free_block_count == 1, "Adjacent free blocks merged into one");
+
+    // Only fits in lower + upper merged together (256 + 64 + block header)
+    void* merged = dmheap_malloc(ctx, 256 + 64, "test");
+    ASSERT_TEST(merged == lower, "Allocation spanning both freed blocks succeeds");
+}
+
 // Test: Large allocation
 static void test_large_allocation(void) {
     printf("\n=== Testing Large Allocation ===\n");
@@ -773,6 +810,7 @@ int main(void) {
     test_aligned_allocation_with_padding();
     test_reallocation();
     test_free_and_concatenate();
+    test_concatenate_larger_lower_block();
     test_large_allocation();
     test_stress_allocations();
     test_module_cleanup();

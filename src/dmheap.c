@@ -286,6 +286,38 @@ static void add_free_block( block_t** list_head, block_t* block_to_add )
 }
 
 /**
+ * @brief Insert a block into a linked list of blocks, keeping it sorted by address.
+ *
+ * Used by concatenate_free_blocks_locked() to line physically adjacent free blocks
+ * up next to each other.
+ *
+ * @param list_head Pointer to the head of the block list.
+ * @param block_to_add Pointer to the block to be added.
+ */
+static void add_block_by_address( block_t** list_head, block_t* block_to_add )
+{
+    if( list_head == NULL || block_to_add == NULL )
+    {
+        return;
+    }
+
+    if( *list_head == NULL || (uintptr_t)block_to_add < (uintptr_t)*list_head )
+    {
+        block_set_next(block_to_add, *list_head);
+        *list_head = block_to_add;
+        return;
+    }
+
+    block_t* current = *list_head;
+    while( current->next != NULL && (uintptr_t)current->next < (uintptr_t)block_to_add )
+    {
+        current = current->next;
+    }
+    block_set_next(block_to_add, current->next);
+    block_set_next(current, block_to_add);
+}
+
+/**
  * @brief Find a suitable free block for allocation.
  *
  * @param ctx       Pointer to the heap context.
@@ -327,44 +359,44 @@ static block_t* find_suitable_block( dmheap_context_t* ctx, size_t size, size_t 
  */
 static void concatenate_free_blocks_locked( dmheap_context_t* ctx )
 {
-    block_t* current = ctx->free_list;
-    while( current != NULL )
-    {
-        // `next` scans ahead for any block physically adjacent to `current`, regardless
-        // of list order (the free list is not address-sorted). `prev` tracks next's real
-        // predecessor *in the list* so that, on a match, we unlink `next` from where it
-        // actually sits - not from current->next, which would silently drop every node
-        // in between from both the free and used lists (they'd become permanently
-        // unreachable, neither free nor allocated).
-        block_t* prev = current;
-        block_t* next = current->next;
-        while( next != NULL )
-        {
-            if( (uintptr_t)current->address + current->size == (uintptr_t)next )
-            {
-                current->size += sizeof(block_t) + next->size;
-                block_set_next( prev, next->next );
-                next = prev->next;
-            }
-            else
-            {
-                prev = next;
-                next = next->next;
-            }
-        }
-        current = current->next;
-    }
-
-    // Merging grows blocks in place without moving them, so the free list (kept
-    // sorted smallest-to-largest by add_free_block()) is likely out of order now -
-    // rebuild it in sorted order.
+    // The free list is sorted by size (add_free_block()), not by address, so a block
+    // and its physical upper neighbour can sit in either order in it. Scanning only
+    // forward from each block misses every pair whose lower block is the larger one -
+    // the heap then stays fragmented even after coalescing. Re-sorting by address
+    // first puts every mergeable pair next to each other, so a single linear pass
+    // merges all of them.
+    block_t* by_address = NULL;
     block_t* unsorted = ctx->free_list;
-    ctx->free_list = NULL;
     while( unsorted != NULL )
     {
         block_t* next = unsorted->next;
-        add_free_block( &ctx->free_list, unsorted );
+        add_block_by_address( &by_address, unsorted );
         unsorted = next;
+    }
+
+    block_t* current = by_address;
+    while( current != NULL && current->next != NULL )
+    {
+        block_t* next = current->next;
+        if( (uintptr_t)current->address + current->size == (uintptr_t)next )
+        {
+            // Stay on `current` - it may now also reach the block after `next`.
+            current->size += sizeof(block_t) + next->size;
+            block_set_next( current, next->next );
+        }
+        else
+        {
+            current = next;
+        }
+    }
+
+    // Rebuild the free list in the size order the rest of the heap relies on.
+    ctx->free_list = NULL;
+    while( by_address != NULL )
+    {
+        block_t* next = by_address->next;
+        add_free_block( &ctx->free_list, by_address );
+        by_address = next;
     }
 }
 
