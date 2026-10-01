@@ -9,7 +9,9 @@
 // Stub for DMOD input API symbols
 void* __dmod_inputs_start __attribute__((weak)) = 0;
 void* __dmod_inputs_size __attribute__((weak)) = 0;
+void* __dmod_inputs_end __attribute__((weak)) = 0;
 
 // Stub for DMOD output API symbols
 void* __dmod_outputs_start __attribute__((weak)) = 0;
 void* __dmod_outputs_size __attribute__((weak)) = 0;
+void* __dmod_outputs_end __attribute__((weak)) = 0;
