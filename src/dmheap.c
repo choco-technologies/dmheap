@@ -35,6 +35,7 @@ typedef struct dmheap_context_t
     size_t alignment;       //!< Alignment for allocations.
     module_t* module_list; //!< Pointer to the list of registered modules.
     char name[DMOD_MAX_MODULE_NAME_LENGTH]; //!< Optional name assigned via dmheap_set_context_name().
+    dmheap_alloc_counters_t counters;       //!< Cumulative allocation counters (see dmheap_get_alloc_counters()).
 } dmheap_context_t;
 
 /**
@@ -44,6 +45,12 @@ typedef struct dmheap_context_t
 
 static dmheap_context_t* g_default_contexts[DMHEAP_MAX_DEFAULT_CONTEXTS];
 static int32_t g_default_context_count = 0;
+
+/**
+ * @brief Ring of the most recent fallback events (see dmheap_get_fallback_events()).
+ */
+static dmheap_fallback_event_t g_fallback_events[DMHEAP_MAX_FALLBACK_EVENTS];
+static uint32_t g_fallback_event_total = 0;     //!< Number of fallback events recorded since boot.
 
 /**
  * @brief Add a heap to the default heap list. Caller must hold the critical section.
@@ -649,6 +656,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buff
     ctx->alignment  = alignment;
     ctx->module_list = NULL;  // Reset module list on initialization
     ctx->name[0] = '\0';      // No name assigned until dmheap_set_context_name() is called
+    memset( &ctx->counters, 0, sizeof(ctx->counters) );
 
     add_default_context_locked( ctx );
 
@@ -1005,6 +1013,118 @@ static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, 
     return aligned_address;
 }
 
+/**
+ * @brief Sum up the free memory of a heap and find its largest free block.
+ * Caller must hold the critical section.
+ */
+static void measure_free_locked( dmheap_context_t* ctx, size_t* free_bytes, size_t* largest_free )
+{
+    *free_bytes = 0;
+    *largest_free = 0;
+    for( block_t* block = ctx->free_list; block != NULL; block = block->next )
+    {
+        *free_bytes += block->size;
+        if( block->size > *largest_free )
+        {
+            *largest_free = block->size;
+        }
+    }
+}
+
+/**
+ * @brief Remember a fallback event in the ring. Caller must hold the critical section.
+ */
+static void record_fallback_event_locked( const dmheap_fallback_event_t* event )
+{
+    dmheap_fallback_event_t* slot = &g_fallback_events[g_fallback_event_total % DMHEAP_MAX_FALLBACK_EVENTS];
+    *slot = *event;
+    slot->sequence = ++g_fallback_event_total;
+}
+
+/**
+ * @brief Allocate from the default heap list, newest heap first, keeping the
+ * allocation counters and the fallback event ring up to date.
+ *
+ * @param alignment   Alignment requirement, or 0 to use each heap's own alignment.
+ * @param size        Size of memory to allocate.
+ * @param module_name Name of the module requesting the allocation.
+ *
+ * @return Pointer to the allocated memory, or NULL if every default heap refused it.
+ */
+static void* alloc_from_default_heaps( size_t alignment, size_t size, const char* module_name )
+{
+    dmheap_fallback_event_t refusal;
+    memset( &refusal, 0, sizeof(refusal) );
+
+    // Failing on any one heap along the way is expected, not an error - the caller
+    // only logs when every heap in the search comes up empty.
+    for( int32_t i = (g_default_context_count - 1); i >= 0; i-- )
+    {
+        dmheap_context_t* heap = g_default_contexts[i];
+        size_t heap_alignment = alignment != 0 ? alignment : heap->alignment;
+        void* ptr = aligned_alloc_in_context( heap, heap_alignment, size, module_name );
+
+        Dmod_EnterCritical();
+        if( ptr != NULL )
+        {
+            if( refusal.refused_by == NULL )
+            {
+                heap->counters.first_choice_count++;
+                heap->counters.first_choice_bytes += size;
+            }
+            else
+            {
+                heap->counters.fallback_count++;
+                heap->counters.fallback_bytes += size;
+                refusal.served_by = heap;
+                record_fallback_event_locked( &refusal );
+            }
+            Dmod_ExitCritical();
+            return ptr;
+        }
+
+        // aligned_alloc_in_context() has already merged the free blocks before giving
+        // up, so what is measured here is what the request really had to work with.
+        size_t free_bytes = 0;
+        size_t largest_free = 0;
+        measure_free_locked( heap, &free_bytes, &largest_free );
+        refusal.reason = free_bytes >= align_size( size, heap_alignment )
+            ? DMHEAP_REFUSE_REASON_FRAGMENTED
+            : DMHEAP_REFUSE_REASON_EXHAUSTED;
+        if( refusal.reason == DMHEAP_REFUSE_REASON_FRAGMENTED )
+        {
+            heap->counters.refused_fragmented_count++;
+        }
+        else
+        {
+            heap->counters.refused_exhausted_count++;
+        }
+        refusal.refused_by = heap;
+        refusal.refused_free_bytes = free_bytes;
+        refusal.refused_largest_free = largest_free;
+        refusal.size = size;
+        refusal.alignment = heap_alignment;
+        if( module_name != NULL )
+        {
+            strncpy( refusal.module_name, module_name, sizeof(refusal.module_name) - 1 );
+            refusal.module_name[sizeof(refusal.module_name) - 1] = '\0';
+        }
+        Dmod_ExitCritical();
+    }
+    return NULL;
+}
+
+/**
+ * @brief Count an allocation that asked for a heap explicitly.
+ */
+static void count_explicit_alloc( dmheap_context_t* ctx, size_t size )
+{
+    Dmod_EnterCritical();
+    ctx->counters.explicit_count++;
+    ctx->counters.explicit_bytes += size;
+    Dmod_ExitCritical();
+}
+
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context_t* ctx, size_t alignment, size_t size, const char* module_name) )
 {
     if( ctx != NULL )
@@ -1013,6 +1133,10 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context
         if( ptr == NULL )
         {
             DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s.\n", size, alignment, module_name);
+        }
+        else
+        {
+            count_explicit_alloc( ctx, size );
         }
         return ptr;
     }
@@ -1023,16 +1147,11 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context
         return NULL;
     }
 
-    // Try every default heap in the order it was added, until one can satisfy the request.
-    // Failing on any one heap along the way is expected, not an error - only log if every
-    // heap in the search comes up empty (below).
-    for( int32_t i = (g_default_context_count - 1); i >= 0; i-- )
+    // Try every default heap, newest first, until one can satisfy the request.
+    void* ptr = alloc_from_default_heaps( alignment, size, module_name );
+    if( ptr != NULL )
     {
-        void* ptr = aligned_alloc_in_context( g_default_contexts[i], alignment, size, module_name );
-        if( ptr != NULL )
-        {
-            return ptr;
-        }
+        return ptr;
     }
 
     DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s in any default heap.\n", size, alignment, module_name);
@@ -1048,6 +1167,10 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _malloc, ( dmheap_context_t* ctx
         {
             DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes for module %s.\n", size, module_name);
         }
+        else
+        {
+            count_explicit_alloc( ctx, size );
+        }
         return ptr;
     }
 
@@ -1057,17 +1180,12 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _malloc, ( dmheap_context_t* ctx
         return NULL;
     }
 
-    // Try every default heap in the order it was added, using each heap's own
-    // alignment, until one can satisfy the request. Failing on any one heap along
-    // the way is expected, not an error - only log if every heap comes up empty.
-    for( int32_t i = (g_default_context_count - 1); i >= 0; i-- )
+    // Try every default heap, newest first, each with its own alignment, until one
+    // can satisfy the request.
+    void* ptr = alloc_from_default_heaps( 0, size, module_name );
+    if( ptr != NULL )
     {
-        dmheap_context_t* heap = g_default_contexts[i];
-        void* ptr = aligned_alloc_in_context( heap, heap->alignment, size, module_name );
-        if( ptr != NULL )
-        {
-            return ptr;
-        }
+        return ptr;
     }
 
     DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes for module %s in any default heap.\n", size, module_name);
@@ -1593,3 +1711,55 @@ DMOD_INPUT_API_DECLARATION(Dmod, 1.0, bool, _RenameTag, ( const char* OldTag, co
     return dmheap_rename_tag( NULL, OldTag, NewTag );
 }
 #endif // DMHEAP_DONT_IMPLEMENT_DMOD_API
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool, _get_alloc_counters, ( dmheap_context_t* ctx, dmheap_alloc_counters_t* out_counters ) )
+{
+    if( out_counters == NULL || ( ctx == NULL && g_default_context_count == 0 ) )
+    {
+        DMOD_LOG_ERROR("dmheap: get_alloc_counters called with invalid arguments.\n");
+        return false;
+    }
+
+    Dmod_EnterCritical();
+    if( ctx != NULL )
+    {
+        *out_counters = ctx->counters;
+    }
+    else
+    {
+        memset( out_counters, 0, sizeof(*out_counters) );
+        for( int32_t i = 0; i < g_default_context_count; i++ )
+        {
+            const dmheap_alloc_counters_t* c = &g_default_contexts[i]->counters;
+            out_counters->explicit_count           += c->explicit_count;
+            out_counters->explicit_bytes           += c->explicit_bytes;
+            out_counters->first_choice_count       += c->first_choice_count;
+            out_counters->first_choice_bytes       += c->first_choice_bytes;
+            out_counters->fallback_count           += c->fallback_count;
+            out_counters->fallback_bytes           += c->fallback_bytes;
+            out_counters->refused_exhausted_count  += c->refused_exhausted_count;
+            out_counters->refused_fragmented_count += c->refused_fragmented_count;
+        }
+    }
+    Dmod_ExitCritical();
+    return true;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, size_t, _get_fallback_events, ( dmheap_fallback_event_t* out_events, size_t max_events ) )
+{
+    if( out_events == NULL || max_events == 0 )
+    {
+        return 0;
+    }
+
+    Dmod_EnterCritical();
+    size_t available = g_fallback_event_total < DMHEAP_MAX_FALLBACK_EVENTS ? g_fallback_event_total : DMHEAP_MAX_FALLBACK_EVENTS;
+    size_t count = available < max_events ? available : max_events;
+    // Oldest of the newest `count` events first
+    uint32_t first = g_fallback_event_total - (uint32_t)count;
+    for( size_t i = 0; i < count; i++ )
+    {
+        out_events[i] = g_fallback_events[(first + i) % DMHEAP_MAX_FALLBACK_EVENTS];
+    }
+    Dmod_ExitCritical();
+    return count;
+}

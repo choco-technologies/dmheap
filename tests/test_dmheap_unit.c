@@ -797,6 +797,116 @@ static void benchmark_allocations(void) {
     }
 }
 
+// Test: Allocation counters and fallback events
+static void test_alloc_counters_and_fallbacks(void) {
+    TEST_SECTION("Allocation Counters and Fallback Events");
+    reset_heap(); // test_heap is the sole default heap - it plays the emergency heap here
+    dmheap_context_t* emergency = dmheap_get_default_context_at(0);
+
+    // The regular heap is added after the emergency one, so it is searched first.
+    #define REGULAR_HEAP_SIZE (4 * 1024)
+    static char regular_heap[REGULAR_HEAP_SIZE];
+    dmheap_context_t* regular = dmheap_init(regular_heap, REGULAR_HEAP_SIZE, 8);
+    ASSERT_TEST(regular != NULL, "Initialize regular heap");
+    ASSERT_TEST(dmheap_add_default_context(regular) == true, "Add regular heap to default list");
+
+    dmheap_alloc_counters_t counters;
+    ASSERT_TEST(dmheap_get_alloc_counters(regular, &counters) && counters.first_choice_count == 0
+                && counters.fallback_count == 0 && counters.explicit_count == 0, "Fresh heap has zero counters");
+    ASSERT_TEST(dmheap_get_alloc_counters(regular, NULL) == false, "NULL output is rejected");
+
+    void* first_choice = dmheap_malloc(NULL, 256, "counted");
+    dmheap_get_alloc_counters(regular, &counters);
+    ASSERT_TEST(first_choice != NULL && counters.first_choice_count == 1 && counters.first_choice_bytes == 256,
+                "Default allocation served by the newest heap counts as first choice");
+
+    void* explicit_ptr = dmheap_malloc(regular, 128, "counted");
+    dmheap_get_alloc_counters(regular, &counters);
+    ASSERT_TEST(explicit_ptr != NULL && counters.explicit_count == 1 && counters.explicit_bytes == 128,
+                "Allocation with an explicit context counts as explicit");
+
+    // Too big for the regular heap as a whole - it must land in the emergency heap.
+    void* too_big = dmheap_malloc(NULL, 2 * REGULAR_HEAP_SIZE, "big_module");
+    ASSERT_TEST(too_big != NULL, "Allocation bigger than the regular heap succeeds");
+    dmheap_get_alloc_counters(regular, &counters);
+    ASSERT_TEST(counters.refused_exhausted_count == 1 && counters.refused_fragmented_count == 0,
+                "Regular heap refused the big allocation as exhausted");
+    dmheap_get_alloc_counters(emergency, &counters);
+    ASSERT_TEST(counters.fallback_count == 1 && counters.fallback_bytes == 2 * REGULAR_HEAP_SIZE
+                && counters.first_choice_count == 0, "Emergency heap counted it as a fallback");
+
+    dmheap_fallback_event_t events[DMHEAP_MAX_FALLBACK_EVENTS];
+    size_t count = dmheap_get_fallback_events(events, DMHEAP_MAX_FALLBACK_EVENTS);
+    ASSERT_TEST(count >= 1, "Fallback event recorded");
+    dmheap_fallback_event_t* last = &events[count - 1];
+    ASSERT_TEST(last->served_by == emergency && last->refused_by == regular
+                && last->reason == DMHEAP_REFUSE_REASON_EXHAUSTED
+                && last->size == 2 * REGULAR_HEAP_SIZE
+                && strcmp(last->module_name, "big_module") == 0, "Exhausted fallback event describes the refusal");
+    ASSERT_TEST(last->refused_free_bytes < 2 * REGULAR_HEAP_SIZE, "Event records the refusing heap's free memory");
+    uint32_t exhausted_sequence = last->sequence;
+
+    // Fragment the regular heap: fill it with small blocks and free every other one,
+    // so there is plenty of free memory in total but no single block big enough.
+    dmheap_free(NULL, first_choice, false);
+    dmheap_free(NULL, explicit_ptr, false);
+    void* blocks[64];
+    size_t block_count = 0;
+    while (block_count < 64) {
+        void* p = dmheap_malloc(regular, 192, "filler");
+        if (p == NULL) break;
+        blocks[block_count++] = p;
+    }
+    ASSERT_TEST(block_count >= 10, "Filled the regular heap with small blocks");
+    for (size_t i = 0; i < block_count; i += 2) {
+        dmheap_free(regular, blocks[i], false);
+    }
+    // The allocator merges adjacent free blocks itself before refusing a request -
+    // do it up front so the largest free block measured here is the one it sees.
+    dmheap_concatenate_free_blocks(regular);
+    dmheap_stats_t stats;
+    dmheap_get_stats(regular, &stats);
+    size_t request = stats.largest_free_block + 64;
+    ASSERT_TEST(stats.free_bytes >= request, "Regular heap has enough free memory in total for the request");
+
+    void* fragmented = dmheap_malloc(NULL, request, "frag_module");
+    ASSERT_TEST(fragmented != NULL, "Allocation the fragmented heap cannot hold still succeeds");
+    dmheap_get_alloc_counters(regular, &counters);
+    ASSERT_TEST(counters.refused_fragmented_count == 1, "Regular heap refused it as fragmented");
+
+    count = dmheap_get_fallback_events(events, DMHEAP_MAX_FALLBACK_EVENTS);
+    last = &events[count - 1];
+    ASSERT_TEST(last->reason == DMHEAP_REFUSE_REASON_FRAGMENTED && last->refused_by == regular
+                && strcmp(last->module_name, "frag_module") == 0, "Fragmented fallback event describes the refusal");
+    TEST_INFO("Refusing heap: %zu bytes free, largest free block %zu bytes, request %zu bytes",
+              last->refused_free_bytes, last->refused_largest_free, request);
+    ASSERT_TEST(last->refused_largest_free < request && last->refused_free_bytes >= request,
+                "Event records the fragmented heap's free memory and largest block");
+    ASSERT_TEST(last->sequence == exhausted_sequence + 1 && events[count - 2].sequence == exhausted_sequence,
+                "Events are returned oldest first with running sequence numbers");
+
+    size_t one = dmheap_get_fallback_events(events, 1);
+    ASSERT_TEST(one == 1 && events[0].sequence == exhausted_sequence + 1, "Limited copy returns the newest events");
+
+    dmheap_alloc_counters_t total;
+    dmheap_alloc_counters_t emergency_counters;
+    dmheap_get_alloc_counters(regular, &counters);
+    dmheap_get_alloc_counters(emergency, &emergency_counters);
+    ASSERT_TEST(dmheap_get_alloc_counters(NULL, &total)
+                && total.fallback_count == counters.fallback_count + emergency_counters.fallback_count
+                && total.explicit_count == counters.explicit_count + emergency_counters.explicit_count,
+                "NULL context sums the counters of every default heap");
+
+    for (size_t i = 1; i < block_count; i += 2) {
+        dmheap_free(regular, blocks[i], false);
+    }
+    dmheap_free(NULL, too_big, false);
+    dmheap_free(NULL, fragmented, false);
+    ASSERT_TEST(dmheap_remove_default_context(regular) == true, "Remove regular heap from default list");
+
+    TEST_INFO("Allocation counters test completed");
+}
+
 int main(void) {
     printf("╔════════════════════════════════════════╗\n");
     printf("║     DMHEAP Unit Tests                  ║\n");
@@ -821,6 +931,7 @@ int main(void) {
     test_multiple_contexts();
     test_default_heap_list();
     test_context_naming();
+    test_alloc_counters_and_fallbacks();
     benchmark_allocations();
     
     // Print summary

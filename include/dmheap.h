@@ -285,4 +285,88 @@ DMOD_BUILTIN_API( dmheap, 1.0, void             , _for_each_free_block, ( dmheap
  */
 DMOD_BUILTIN_API( dmheap, 1.0, void             , _for_each_used_block, ( dmheap_context_t* ctx, dmheap_block_visitor_t visitor, void* user_data ) );
 
+/**
+ * @brief Cumulative allocation counters of one heap (see dmheap_get_alloc_counters()).
+ *
+ * Every allocation is counted in exactly one of the explicit/first-choice/fallback
+ * groups of the heap that served it. The counters only ever grow - they describe
+ * how the heap got to its current state, not what is allocated right now (use
+ * dmheap_get_stats() for that). The byte counters hold the requested sizes.
+ *
+ * The default heaps are searched from the most recently added one to the first
+ * added one, so a heap added early (e.g. a small emergency heap) only serves
+ * "first-choice" allocations while it is the newest default heap - typically
+ * during early boot - and "fallback" allocations once every heap added after it
+ * refused a request.
+ */
+typedef struct dmheap_alloc_counters_t
+{
+    size_t explicit_count;          //!< Allocations that asked for this heap explicitly (non-NULL context).
+    size_t explicit_bytes;          //!< Bytes requested by those allocations.
+    size_t first_choice_count;      //!< Default-heap allocations served while this heap was the first heap searched.
+    size_t first_choice_bytes;      //!< Bytes requested by those allocations.
+    size_t fallback_count;          //!< Default-heap allocations served only after every heap searched before this one refused them.
+    size_t fallback_bytes;          //!< Bytes requested by those allocations.
+    size_t refused_exhausted_count; //!< Default-heap requests this heap refused because its free memory, in total, was too small.
+    size_t refused_fragmented_count;//!< Default-heap requests this heap refused although it had enough free memory, just no single block big enough.
+} dmheap_alloc_counters_t;
+
+/**
+ * @brief Get the cumulative allocation counters of a heap.
+ *
+ * @param ctx          Pointer to the heap context (NULL to sum the counters of every default heap).
+ * @param out_counters Filled in with the counters.
+ *
+ * @return true on success, false if no context is available or out_counters is NULL.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, bool             , _get_alloc_counters, ( dmheap_context_t* ctx, dmheap_alloc_counters_t* out_counters ) );
+
+/**
+ * @brief Why a default heap refused an allocation request.
+ */
+typedef enum dmheap_refuse_reason_t
+{
+    DMHEAP_REFUSE_REASON_EXHAUSTED  = 0,    //!< Not enough free memory in the heap, in total.
+    DMHEAP_REFUSE_REASON_FRAGMENTED = 1,    //!< Enough free memory in total, but no single free block big enough.
+} dmheap_refuse_reason_t;
+
+/**
+ * @brief Number of the most recent fallback events dmheap remembers.
+ */
+#define DMHEAP_MAX_FALLBACK_EVENTS 16
+
+/**
+ * @brief One default-heap allocation that a heap had to serve as a fallback.
+ *
+ * Describes the refusal of the heap searched right before the one that finally
+ * served the request (the "refusing" heap) - for a heap meant as a last resort,
+ * each event says why the regular heap could not take the allocation.
+ */
+typedef struct dmheap_fallback_event_t
+{
+    char   module_name[DMOD_MAX_MODULE_NAME_LENGTH]; //!< Module that requested the allocation ("" if unknown).
+    size_t size;                    //!< Requested size in bytes.
+    size_t alignment;               //!< Requested alignment.
+    dmheap_context_t* served_by;    //!< Heap that served the request.
+    dmheap_context_t* refused_by;   //!< Heap searched right before served_by, which refused the request.
+    dmheap_refuse_reason_t reason;  //!< Why refused_by refused the request.
+    size_t refused_free_bytes;      //!< Free memory in refused_by at that moment.
+    size_t refused_largest_free;    //!< Largest free block in refused_by at that moment.
+    uint32_t sequence;              //!< Running number of the event (1 for the first fallback since boot).
+} dmheap_fallback_event_t;
+
+/**
+ * @brief Copy the most recent fallback events, oldest first.
+ *
+ * At most DMHEAP_MAX_FALLBACK_EVENTS are remembered; older ones are dropped
+ * (the sequence numbers show how many were). The heap pointers can be passed to
+ * dmheap_get_context_name().
+ *
+ * @param out_events Array receiving the events.
+ * @param max_events Capacity of out_events.
+ *
+ * @return Number of events copied into out_events.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, size_t           , _get_fallback_events, ( dmheap_fallback_event_t* out_events, size_t max_events ) );
+
 #endif // DMHEAP_H
