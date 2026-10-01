@@ -8,7 +8,7 @@
 #       
 # ##############################################################################
 ifeq ($(DMOD_DIR),)
-    DMOD_DIR = ../dmod
+    DMOD_DIR = ../../../../..$(DMOD_DIR)
 endif
 
 #
@@ -18,10 +18,10 @@ DMOD_LIB_NAME=libdmheap.a
 DMOD_SOURCES=src/dmheap.c
 DMOD_INC_DIRS = include\
 		$(DMOD_DIR)/inc\
-		../../../../../tmp/claude-0/-home-user/6f14d020-9695-5b28-84e5-3bd058d67dd1/scratchpad/docker/build-nodma/lib/dmod
+		../../../../../tmp/dmheap_test_build/_deps/dmod-build
 DMOD_LIBS = dmod_inc
 DMOD_GEN_HEADERS_IN = 
-DMOD_DEFINITIONS = $<$<BOOL:OFF>:DMHEAP_DONT_IMPLEMENT_DMOD_API>;DMHEAP_VERSION="1.0";DMOD_CURRENT_ALLOCATOR="dmheap"
+DMOD_DEFINITIONS = $<$<BOOL:OFF>:DMHEAP_DONT_IMPLEMENT_DMOD_API>;DMHEAP_VERSION="1.0"
 
 # -----------------------------------------------------------------------------
 # 	Initialization of paths
