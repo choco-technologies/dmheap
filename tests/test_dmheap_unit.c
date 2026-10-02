@@ -907,6 +907,49 @@ static void test_alloc_counters_and_fallbacks(void) {
     TEST_INFO("Allocation counters test completed");
 }
 
+// Test: a reserved heap is skipped by NULL-context allocations but stays
+// reachable by name and by pointer
+static void test_reserved_heap(void) {
+    printf("\n=== Testing Reserved Heap ===\n");
+
+    static char general[4096];
+    static char special[16384];
+    dmheap_context_t* special_ctx = dmheap_init(special, sizeof(special), 8);
+    dmheap_set_default_context(special_ctx);
+    dmheap_set_context_name(special_ctx, "dma");
+    dmheap_context_t* general_ctx = dmheap_init(general, sizeof(general), 8);
+    dmheap_add_default_context(general_ctx);
+
+    ASSERT_TEST(dmheap_set_context_reserved(special_ctx, true), "Reserve a heap");
+    ASSERT_TEST(dmheap_is_context_reserved(special_ctx), "Heap reports itself reserved");
+    ASSERT_TEST(!dmheap_is_context_reserved(general_ctx), "Other heaps stay unreserved");
+    ASSERT_TEST(!dmheap_set_context_reserved(NULL, true), "Reserving NULL fails");
+
+    // Larger than the whole general heap: must fail, not spill.
+    void* small = dmheap_malloc(NULL, 256, "test");
+    ASSERT_TEST(small >= (void*)general && small < (void*)(general + sizeof(general)),
+                "NULL-context allocation comes from the unreserved heap");
+    void* big = dmheap_malloc(NULL, 8000, "test");
+    ASSERT_TEST(big == NULL, "NULL-context allocation does not spill into the reserved heap");
+
+    ASSERT_TEST(dmheap_get_context_by_name("dma") == special_ctx, "Reserved heap is still found by name");
+    void* explicit_ptr = dmheap_malloc(special_ctx, 1024, "test");
+    ASSERT_TEST(explicit_ptr >= (void*)special && explicit_ptr < (void*)(special + sizeof(special)),
+                "Explicit allocation from the reserved heap works");
+    dmheap_free(NULL, explicit_ptr, true);   // NULL context: found by pointer
+    void* refill = dmheap_malloc(special_ctx, 8000, "test");
+    ASSERT_TEST(refill != NULL, "Block freed through NULL context");
+    dmheap_free(special_ctx, refill, true);
+
+    // Again too large for the general heap - now the special one takes it.
+    dmheap_set_context_reserved(special_ctx, false);
+    void* spilled = dmheap_malloc(NULL, 8000, "test");
+    ASSERT_TEST(spilled >= (void*)special && spilled < (void*)(special + sizeof(special)),
+                "Unreserved heap serves NULL-context allocations again");
+    dmheap_free(NULL, spilled, true);
+    dmheap_free(NULL, small, true);
+}
+
 int main(void) {
     printf("╔════════════════════════════════════════╗\n");
     printf("║     DMHEAP Unit Tests                  ║\n");
@@ -932,6 +975,7 @@ int main(void) {
     test_default_heap_list();
     test_context_naming();
     test_alloc_counters_and_fallbacks();
+    test_reserved_heap();
     benchmark_allocations();
     
     // Print summary

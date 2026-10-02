@@ -35,6 +35,33 @@ DMOD_BUILTIN_API( dmheap, 1.0, dmheap_context_t*, _init, ( void* buffer, size_t 
  */
 DMOD_BUILTIN_API( dmheap, 1.0, bool             , _set_context_name, ( dmheap_context_t* ctx, const char* name ) );
 /**
+ * @brief Reserve a heap for explicit use only.
+ *
+ * A reserved heap stays in the default heap list - it can still be found with
+ * dmheap_get_context_by_name(), and NULL-context free/realloc/retag still find
+ * the blocks it owns - but allocations with a NULL context (dmheap_malloc,
+ * dmheap_aligned_alloc and the SAL Dmod_Malloc/Dmod_MallocEx/... wrappers)
+ * skip it. Use it for a small special-purpose region (e.g. DMA-capable RAM)
+ * that ordinary allocations - module code, parsed configuration, ... - must
+ * not fill up while the general heaps are short.
+ *
+ * @param ctx      Pointer to the heap context.
+ * @param reserved true to reserve the heap, false to let it serve NULL-context
+ *                 allocations again (the default).
+ *
+ * @return true on success, false if ctx is NULL.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, bool             , _set_context_reserved, ( dmheap_context_t* ctx, bool reserved ) );
+/**
+ * @brief Check whether a heap is reserved for explicit use only.
+ *
+ * @param ctx Pointer to the heap context.
+ *
+ * @return true if dmheap_set_context_reserved(ctx, true) was called, false
+ *         otherwise or if ctx is NULL.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, bool             , _is_context_reserved, ( dmheap_context_t* ctx ) );
+/**
  * @brief Get the name previously assigned to a heap context.
  *
  * @param ctx Pointer to the heap context (NULL to use the primary default context).

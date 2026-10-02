@@ -36,6 +36,7 @@ typedef struct dmheap_context_t
     module_t* module_list; //!< Pointer to the list of registered modules.
     char name[DMOD_MAX_MODULE_NAME_LENGTH]; //!< Optional name assigned via dmheap_set_context_name().
     dmheap_alloc_counters_t counters;       //!< Cumulative allocation counters (see dmheap_get_alloc_counters()).
+    bool reserved;                          //!< Skipped by NULL-context allocations (see dmheap_set_context_reserved()).
 } dmheap_context_t;
 
 /**
@@ -656,6 +657,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buff
     ctx->alignment  = alignment;
     ctx->module_list = NULL;  // Reset module list on initialization
     ctx->name[0] = '\0';      // No name assigned until dmheap_set_context_name() is called
+    ctx->reserved = false;    // Serves NULL-context allocations until dmheap_set_context_reserved()
     memset( &ctx->counters, 0, sizeof(ctx->counters) );
 
     add_default_context_locked( ctx );
@@ -686,6 +688,25 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _set_context_name, ( dmheap_cont
     }
     Dmod_ExitCritical();
     return true;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _set_context_reserved, ( dmheap_context_t* ctx, bool reserved ) )
+{
+    if( ctx == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: set_context_reserved called with NULL context.\n");
+        return false;
+    }
+
+    Dmod_EnterCritical();
+    ctx->reserved = reserved;
+    Dmod_ExitCritical();
+    return true;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _is_context_reserved, ( dmheap_context_t* ctx ) )
+{
+    return ctx != NULL && ctx->reserved;
 }
 
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, const char*,  _get_context_name, ( dmheap_context_t* ctx ) )
@@ -1061,6 +1082,11 @@ static void* alloc_from_default_heaps( size_t alignment, size_t size, const char
     for( int32_t i = (g_default_context_count - 1); i >= 0; i-- )
     {
         dmheap_context_t* heap = g_default_contexts[i];
+        if( heap->reserved )
+        {
+            // Only handed out on explicit request (dmheap_get_context_by_name()).
+            continue;
+        }
         size_t heap_alignment = alignment != 0 ? alignment : heap->alignment;
         void* ptr = aligned_alloc_in_context( heap, heap_alignment, size, module_name );
 
