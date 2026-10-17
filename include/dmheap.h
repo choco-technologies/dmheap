@@ -27,6 +27,10 @@ DMOD_BUILTIN_API( dmheap, 1.0, dmheap_context_t*, _init, ( void* buffer, size_t 
  * have also been added to the default heap list (see dmheap_add_default_context())
  * can be found by name - naming a context does not by itself register it there.
  *
+ * A name may be a list of tags separated by commas - the kinds of memory the
+ * heap is ("dtcm,fast,dma"): dmheap_get_context_by_name() finds it by any of
+ * them, dmheap_malloc_tagged() / Dmod_MallocTagged() allocate from it.
+ *
  * @param ctx  Pointer to the heap context.
  * @param name Name to assign to the context, or NULL to clear it. Truncated to
  *             DMOD_MAX_MODULE_NAME_LENGTH - 1 characters if longer.
@@ -58,11 +62,11 @@ DMOD_BUILTIN_API( dmheap, 1.0, void             , _set_default_context, ( dmheap
  *
  * When NULL is passed as the context to an allocation function (dmheap_malloc,
  * dmheap_aligned_alloc, dmheap_realloc, and the SAL Dmod_Malloc/Dmod_MallocEx/...
- * wrappers), every heap in this list is tried in the order it was added until
- * one satisfies the request. Pointer-based operations (dmheap_free,
+ * wrappers), every heap in this list is tried, the newest first, until one
+ * satisfies the request. Pointer-based operations (dmheap_free,
  * dmheap_retag, ...) with a NULL context search the list for the heap that
- * actually owns the pointer. The first heap ever initialized via dmheap_init()
- * is added automatically; call this to register additional heaps.
+ * actually owns the pointer. Every heap initialized via dmheap_init() is added
+ * automatically; call this to add one that was removed again.
  *
  * @param ctx Pointer to the heap context to add. Adding the same context twice
  *            is a no-op.
@@ -109,17 +113,40 @@ DMOD_BUILTIN_API( dmheap, 1.0, size_t           , _get_default_context_count, ( 
  */
 DMOD_BUILTIN_API( dmheap, 1.0, dmheap_context_t*, _get_default_context_at, ( size_t index ) );
 /**
- * @brief Find a default heap by its name.
+ * @brief Find a default heap by its name, or by one of its tags.
  *
  * Searches the default heap list (see dmheap_add_default_context()) for a context
- * previously named via dmheap_set_context_name(). A heap that was never added to
+ * previously named via dmheap_set_context_name(): the whole name first, then a
+ * heap whose name - a list of tags separated by commas - has @p name as a tag
+ * (the one added to the default list first). A heap that was never added to
  * the default list cannot be found this way, even if it was named.
  *
- * @param name Name to search for.
+ * @param name Name, or one tag, to search for.
  *
  * @return Pointer to the matching heap context, or NULL if none was found.
  */
 DMOD_BUILTIN_API( dmheap, 1.0, dmheap_context_t*, _get_context_by_name, ( const char* name ) );
+/**
+ * @brief Allocate memory of a kind: from the heaps tagged with the first tag of
+ *        @p tags, else the next one's, ..., else from the default heaps (as
+ *        dmheap_malloc() with a NULL context).
+ *
+ * A heap is tagged by its name - a list of tags separated by commas, set with
+ * dmheap_set_context_name() (e.g. "dtcm,fast,dma"). Among the heaps with one
+ * tag, the one added to the default list first is tried first: the order a
+ * system creates its heaps in is its preference. Freed with dmheap_free().
+ *
+ * @param tags        Kinds of memory, preferred first, separated by commas ("fast", "dma,internal").
+ * @param size        Size of memory to allocate.
+ * @param module_name Name of the module requesting allocation.
+ *
+ * @return Pointer to the allocated memory, NULL when no heap has room.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, void*            , _malloc_tagged, ( const char* tags, size_t size, const char* module_name ) );
+/**
+ * @brief dmheap_malloc_tagged() with an alignment (0: each heap's own).
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, void*            , _aligned_alloc_tagged, ( const char* tags, size_t alignment, size_t size, const char* module_name ) );
 /**
  * @brief Check if the heap is initialized.
  * 

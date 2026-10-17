@@ -24,8 +24,9 @@ instances (`dmheap_init`); most call sites pass `NULL` to fall back to the
 ### The default heap list
 
 The default heap list holds up to `DMHEAP_MAX_DEFAULT_CONTEXTS` (8) heaps.
-The very first heap ever initialized via `dmheap_init()` joins it
-automatically; `dmheap_add_default_context(ctx)` adds further heaps,
+Every heap initialized via `dmheap_init()` joins it automatically (the
+first one is the primary default heap); `dmheap_add_default_context(ctx)` adds
+a heap that was taken out again,
 `dmheap_remove_default_context(ctx)` takes one back out, and
 `dmheap_set_default_context(ctx)` replaces the whole list with a single entry
 (or clears it if `ctx` is `NULL`).
@@ -72,8 +73,8 @@ has already been allocated under a different or absent identity.
 ### Initialization
 
 - `dmheap_init(buffer, size, alignment)` - initialize a heap over a raw
-  buffer, returning a context. The first heap ever initialized joins the
-  default heap list automatically (see above).
+  buffer, returning a context. Every heap initialized joins the default heap
+  list automatically (see above).
 - `dmheap_add_default_context(ctx)` - add another heap to the default heap
   list.
 - `dmheap_remove_default_context(ctx)` - remove a heap from the default heap

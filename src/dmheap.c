@@ -739,22 +739,77 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _get_default_contex
     return index < g_default_context_count ? g_default_contexts[index] : NULL;
 }
 
+/**
+ * @brief The next tag of a list - tags separated by commas, spaces around them not counted.
+ *
+ * @param list   Where to look from; moved past the tag.
+ * @param length Receives the tag's length.
+ *
+ * @return The tag's first character, NULL when the list has no more tags.
+ */
+static const char* next_tag( const char** list, size_t* length )
+{
+    const char* p = *list;
+    while( *p == ' ' || *p == ',' )
+    {
+        p++;
+    }
+    const char* start = p;
+    while( *p != '\0' && *p != ',' )
+    {
+        p++;
+    }
+    const char* end = p;
+    while( end > start && end[-1] == ' ' )
+    {
+        end--;
+    }
+    *list = p;
+    *length = (size_t)(end - start);
+    return (*length > 0) ? start : NULL;
+}
+
+/**
+ * @brief Whether a heap is tagged with tag[0 .. length) - its name is the list of its tags.
+ */
+static bool has_tag( const dmheap_context_t* ctx, const char* tag, size_t length )
+{
+    const char* list = ctx->name;
+    size_t n = 0;
+    for( const char* t = next_tag( &list, &n ); t != NULL; t = next_tag( &list, &n ) )
+    {
+        if( n == length && strncmp( t, tag, length ) == 0 )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _get_context_by_name, ( const char* name ) )
 {
-    if( name == NULL )
+    if( name == NULL || name[0] == '\0' )
     {
         return NULL;
     }
 
+    // The whole name first, then a heap tagged with it - the first one added
     dmheap_context_t* found = NULL;
+    size_t length = strlen( name );
     Dmod_EnterCritical();
-    for( size_t i = 0; i < g_default_context_count; i++ )
+    for( size_t i = 0; i < g_default_context_count && found == NULL; i++ )
     {
         if( g_default_contexts[i]->name[0] != '\0' &&
             strncmp( g_default_contexts[i]->name, name, DMOD_MAX_MODULE_NAME_LENGTH ) == 0 )
         {
             found = g_default_contexts[i];
-            break;
+        }
+    }
+    for( size_t i = 0; i < g_default_context_count && found == NULL && strchr( name, ',' ) == NULL; i++ )
+    {
+        if( has_tag( g_default_contexts[i], name, length ) )
+        {
+            found = g_default_contexts[i];
         }
     }
     Dmod_ExitCritical();
@@ -1156,6 +1211,60 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc, ( dmheap_context
 
     DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu for module %s in any default heap.\n", size, alignment, module_name);
     return NULL;
+}
+
+/**
+ * @brief Allocate from the heaps tagged with each tag of `tags` in turn - among
+ * the heaps with one tag, the first one added first -, else from the default
+ * heaps as dmheap_malloc() does.
+ *
+ * @param alignment 0: each heap's own alignment.
+ *
+ * @return Pointer to the allocated memory, NULL when no heap has room.
+ */
+static void* alloc_tagged( const char* tags, size_t alignment, size_t size, const char* module_name )
+{
+    const char* list = (tags != NULL) ? tags : "";
+    size_t length = 0;
+    for( const char* tag = next_tag( &list, &length ); tag != NULL; tag = next_tag( &list, &length ) )
+    {
+        for( size_t i = 0; i < g_default_context_count; i++ )
+        {
+            dmheap_context_t* heap = g_default_contexts[i];
+            if( !has_tag( heap, tag, length ) )
+            {
+                continue;
+            }
+            void* ptr = aligned_alloc_in_context( heap, (alignment != 0) ? alignment : heap->alignment, size, module_name );
+            if( ptr != NULL )
+            {
+                count_explicit_alloc( heap, size );
+                return ptr;
+            }
+        }
+    }
+    return (g_default_context_count > 0) ? alloc_from_default_heaps( alignment, size, module_name ) : NULL;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _malloc_tagged, ( const char* tags, size_t size, const char* module_name ) )
+{
+    void* ptr = alloc_tagged( tags, 0, size, module_name );
+    if( ptr == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes (%s) for module %s.\n", size, (tags != NULL) ? tags : "", module_name);
+    }
+    return ptr;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _aligned_alloc_tagged, ( const char* tags, size_t alignment, size_t size, const char* module_name ) )
+{
+    void* ptr = alloc_tagged( tags, alignment, size, module_name );
+    if( ptr == NULL )
+    {
+        DMOD_LOG_ERROR("dmheap: Unable to allocate %zu bytes with alignment %zu (%s) for module %s.\n", size, alignment,
+                       (tags != NULL) ? tags : "", module_name);
+    }
+    return ptr;
 }
 
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void*, _malloc, ( dmheap_context_t* ctx, size_t size, const char* module_name ) )
@@ -1679,6 +1788,11 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void, _for_each_used_block, ( dmheap_co
 DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void*, _MallocEx, ( size_t Size, const char* ModuleName ))
 {
     return dmheap_malloc( NULL, Size, ModuleName );
+}
+
+DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void*, _MallocTaggedEx, ( const char* Tags, size_t Size, const char* ModuleName ))
+{
+    return dmheap_malloc_tagged( Tags, Size, ModuleName );
 }
 
 DMOD_INPUT_API_DECLARATION(Dmod, 1.0, void*, _ReallocEx, ( void* Ptr, size_t Size, const char* ModuleName ))

@@ -615,11 +615,9 @@ static void test_default_heap_list(void) {
     dmheap_context_t* extra = dmheap_init(extra_heap, EXTRA_HEAP_SIZE, 8);
     ASSERT_TEST(extra != NULL, "Initialize extra heap");
 
-    // A second dmheap_init() must NOT join the default list on its own.
-    ASSERT_TEST(dmheap_get_default_context_count() == 1, "Default list still has one heap after second init");
+    // Every dmheap_init() joins the default list on its own.
+    ASSERT_TEST(dmheap_get_default_context_count() == 2, "Default list has two heaps after second init");
 
-    ASSERT_TEST(dmheap_add_default_context(extra) == true, "Add extra heap to default list");
-    ASSERT_TEST(dmheap_get_default_context_count() == 2, "Default list now has two heaps");
     ASSERT_TEST(dmheap_add_default_context(extra) == true, "Re-adding the same heap is a no-op success");
     ASSERT_TEST(dmheap_get_default_context_count() == 2, "Default list still has two heaps after re-add");
     ASSERT_TEST(dmheap_get_default_context_at(0) != NULL && dmheap_get_default_context_at(1) != NULL, "Both slots are populated");
@@ -687,10 +685,8 @@ static void test_context_naming(void) {
     ASSERT_TEST(extra != NULL, "Initialize extra heap");
     ASSERT_TEST(dmheap_set_context_name(extra, "extram") == true, "Name the extra heap");
 
-    // Naming alone does not register the heap in the default list.
-    ASSERT_TEST(dmheap_get_context_by_name("extram") == NULL, "Lookup fails before extra heap joins the default list");
-    ASSERT_TEST(dmheap_add_default_context(extra) == true, "Add extra heap to default list");
-    ASSERT_TEST(dmheap_get_context_by_name("extram") == extra, "Lookup succeeds once extra heap is in the default list");
+    // Initialized, the heap is in the default list: found by its name.
+    ASSERT_TEST(dmheap_get_context_by_name("extram") == extra, "Lookup finds the extra heap (dmheap_init() added it)");
     ASSERT_TEST(dmheap_get_context_by_name("kernel") == primary, "Lookup for the first heap still works");
 
     // Renaming/clearing.
@@ -701,9 +697,64 @@ static void test_context_naming(void) {
     ASSERT_TEST(strcmp(dmheap_get_context_name(extra), "") == 0, "Cleared name reads back empty");
     ASSERT_TEST(dmheap_get_context_by_name("extram2") == NULL, "Cleared name no longer resolves");
 
+    // Out of the default list: not found by its name any more.
+    ASSERT_TEST(dmheap_set_context_name(extra, "extram") == true, "Name the extra heap again");
     ASSERT_TEST(dmheap_remove_default_context(extra) == true, "Remove extra heap from default list");
+    ASSERT_TEST(dmheap_get_context_by_name("extram") == NULL, "Lookup fails once the extra heap left the default list");
 
     TEST_INFO("Context naming test completed");
+}
+
+// Test: heaps tagged by their names, memory of a kind
+static void test_tags(void) {
+    TEST_SECTION("Tags");
+    reset_heap(); // test_heap: the sole default heap, untagged - the default memory here
+
+    #define TAGGED_HEAP_SIZE (4 * 1024)
+    static char dtcm_heap[TAGGED_HEAP_SIZE];
+    static char sram2_heap[TAGGED_HEAP_SIZE];
+    dmheap_context_t* sram2 = dmheap_init(sram2_heap, TAGGED_HEAP_SIZE, 8);       /* (init adds it to the default list) */
+    dmheap_context_t* dtcm = dmheap_init(dtcm_heap, TAGGED_HEAP_SIZE, 8);
+    ASSERT_TEST(dtcm != NULL && sram2 != NULL, "Initialize the tagged heaps");
+    ASSERT_TEST(dmheap_set_context_name(sram2, "sram2, dma,internal") == true, "Tag the first heap");
+    ASSERT_TEST(dmheap_set_context_name(dtcm, "dtcm,fast,dma") == true, "Tag the second heap");
+    (void)dmheap_add_default_context(sram2);
+    (void)dmheap_add_default_context(dtcm);
+    ASSERT_TEST(dmheap_get_default_context_at(1) == sram2 && dmheap_get_default_context_at(2) == dtcm, "Both in the default list, sram2 first");
+    dmheap_context_t* plain = dmheap_get_default_context_at(0);
+
+    // Found by the whole name or one tag - the first heap added with it
+    ASSERT_TEST(dmheap_get_context_by_name("dtcm,fast,dma") == dtcm, "The whole name finds the heap");
+    ASSERT_TEST(dmheap_get_context_by_name("fast") == dtcm, "A tag finds the heap");
+    ASSERT_TEST(dmheap_get_context_by_name("dma") == sram2, "A tag two heaps have: the first one added");
+    ASSERT_TEST(dmheap_get_context_by_name("internal") == sram2, "A tag after spaces");
+    ASSERT_TEST(dmheap_get_context_by_name("dm") == NULL && dmheap_get_context_by_name("") == NULL, "Part of a tag finds nothing");
+
+    // Memory of a kind: the first tag's heaps, then the next tag's, then the default heaps
+    void* fast = dmheap_malloc_tagged("fast", 128, "tags_test");
+    ASSERT_TEST(fast >= (void*)dtcm_heap && fast < (void*)(dtcm_heap + TAGGED_HEAP_SIZE), "fast: the dtcm heap");
+    void* dma = dmheap_aligned_alloc_tagged("dma", 32, 128, "tags_test");
+    ASSERT_TEST(dma >= (void*)sram2_heap && dma < (void*)(sram2_heap + TAGGED_HEAP_SIZE) && ((uintptr_t)dma % 32u) == 0,
+                "dma: the heap added first, aligned");
+    void* big = dmheap_malloc_tagged("fast, dma", 3 * 1024, "tags_test");        /* fits one of them */
+    ASSERT_TEST(big >= (void*)dtcm_heap && big < (void*)(dtcm_heap + TAGGED_HEAP_SIZE), "fast,dma: fast while it has room");
+    void* more = dmheap_malloc_tagged("fast,dma", 3 * 1024, "tags_test");        /* fast is full */
+    ASSERT_TEST(more >= (void*)sram2_heap && more < (void*)(sram2_heap + TAGGED_HEAP_SIZE), "fast,dma: then dma");
+    void* other = dmheap_malloc_tagged("ccm", 64, "tags_test");                  /* no such kind */
+    ASSERT_TEST(other != NULL && dmheap_get_context_by_name("ccm") == NULL, "A kind no heap has: the default heaps");
+    void* none = dmheap_malloc_tagged(NULL, 64, "tags_test");
+    ASSERT_TEST(none != NULL, "No kind: the default heaps");
+    ASSERT_TEST(dmheap_malloc_tagged("fast", 2 * TEST_HEAP_SIZE, "tags_test") == NULL, "Too large anywhere: NULL");
+
+    void* via_dmod = Dmod_MallocTaggedEx("fast", 64, "tags_test");
+    ASSERT_TEST(via_dmod >= (void*)dtcm_heap && via_dmod < (void*)(dtcm_heap + TAGGED_HEAP_SIZE), "Dmod_MallocTaggedEx: the same");
+
+    void* blocks[] = { fast, dma, big, more, other, none, via_dmod };
+    for (size_t i = 0; i < sizeof(blocks) / sizeof(blocks[0]); i++)
+        dmheap_free(NULL, blocks[i], true);                                     /* found in any default heap */
+    (void)plain;
+    ASSERT_TEST(dmheap_remove_default_context(dtcm) && dmheap_remove_default_context(sram2), "Remove the tagged heaps");
+    TEST_INFO("Tags test completed");
 }
 
 // Performance benchmark
@@ -931,6 +982,7 @@ int main(void) {
     test_multiple_contexts();
     test_default_heap_list();
     test_context_naming();
+    test_tags();
     test_alloc_counters_and_fallbacks();
     benchmark_allocations();
     
