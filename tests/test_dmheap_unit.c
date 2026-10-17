@@ -615,11 +615,9 @@ static void test_default_heap_list(void) {
     dmheap_context_t* extra = dmheap_init(extra_heap, EXTRA_HEAP_SIZE, 8);
     ASSERT_TEST(extra != NULL, "Initialize extra heap");
 
-    // A second dmheap_init() must NOT join the default list on its own.
-    ASSERT_TEST(dmheap_get_default_context_count() == 1, "Default list still has one heap after second init");
+    // Every dmheap_init() joins the default list on its own.
+    ASSERT_TEST(dmheap_get_default_context_count() == 2, "Default list has two heaps after second init");
 
-    ASSERT_TEST(dmheap_add_default_context(extra) == true, "Add extra heap to default list");
-    ASSERT_TEST(dmheap_get_default_context_count() == 2, "Default list now has two heaps");
     ASSERT_TEST(dmheap_add_default_context(extra) == true, "Re-adding the same heap is a no-op success");
     ASSERT_TEST(dmheap_get_default_context_count() == 2, "Default list still has two heaps after re-add");
     ASSERT_TEST(dmheap_get_default_context_at(0) != NULL && dmheap_get_default_context_at(1) != NULL, "Both slots are populated");
@@ -687,10 +685,8 @@ static void test_context_naming(void) {
     ASSERT_TEST(extra != NULL, "Initialize extra heap");
     ASSERT_TEST(dmheap_set_context_name(extra, "extram") == true, "Name the extra heap");
 
-    // Naming alone does not register the heap in the default list.
-    ASSERT_TEST(dmheap_get_context_by_name("extram") == NULL, "Lookup fails before extra heap joins the default list");
-    ASSERT_TEST(dmheap_add_default_context(extra) == true, "Add extra heap to default list");
-    ASSERT_TEST(dmheap_get_context_by_name("extram") == extra, "Lookup succeeds once extra heap is in the default list");
+    // Initialized, the heap is in the default list: found by its name.
+    ASSERT_TEST(dmheap_get_context_by_name("extram") == extra, "Lookup finds the extra heap (dmheap_init() added it)");
     ASSERT_TEST(dmheap_get_context_by_name("kernel") == primary, "Lookup for the first heap still works");
 
     // Renaming/clearing.
@@ -701,7 +697,10 @@ static void test_context_naming(void) {
     ASSERT_TEST(strcmp(dmheap_get_context_name(extra), "") == 0, "Cleared name reads back empty");
     ASSERT_TEST(dmheap_get_context_by_name("extram2") == NULL, "Cleared name no longer resolves");
 
+    // Out of the default list: not found by its name any more.
+    ASSERT_TEST(dmheap_set_context_name(extra, "extram") == true, "Name the extra heap again");
     ASSERT_TEST(dmheap_remove_default_context(extra) == true, "Remove extra heap from default list");
+    ASSERT_TEST(dmheap_get_context_by_name("extram") == NULL, "Lookup fails once the extra heap left the default list");
 
     TEST_INFO("Context naming test completed");
 }

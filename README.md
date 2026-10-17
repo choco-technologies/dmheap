@@ -583,7 +583,7 @@ Initialize the heap with a given buffer and size. The context structure is store
   - `alignment`: Default alignment for allocations (must be power of 2)
 - **Returns:** Pointer to the heap context, or `NULL` if initialization fails
 - **Thread-safe:** Yes
-- **Note:** The first initialized context automatically becomes the default context
+- **Note:** Every initialized context joins the default heap list automatically; the first one is the primary default context
 
 #### `dmheap_set_context_name`
 

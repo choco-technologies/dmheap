@@ -62,11 +62,11 @@ DMOD_BUILTIN_API( dmheap, 1.0, void             , _set_default_context, ( dmheap
  *
  * When NULL is passed as the context to an allocation function (dmheap_malloc,
  * dmheap_aligned_alloc, dmheap_realloc, and the SAL Dmod_Malloc/Dmod_MallocEx/...
- * wrappers), every heap in this list is tried in the order it was added until
- * one satisfies the request. Pointer-based operations (dmheap_free,
+ * wrappers), every heap in this list is tried, the newest first, until one
+ * satisfies the request. Pointer-based operations (dmheap_free,
  * dmheap_retag, ...) with a NULL context search the list for the heap that
- * actually owns the pointer. The first heap ever initialized via dmheap_init()
- * is added automatically; call this to register additional heaps.
+ * actually owns the pointer. Every heap initialized via dmheap_init() is added
+ * automatically; call this to add one that was removed again.
  *
  * @param ctx Pointer to the heap context to add. Adding the same context twice
  *            is a no-op.
