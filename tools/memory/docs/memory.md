@@ -113,3 +113,23 @@ memory --fragmentation
 # Everything at once
 memory -s -m -f
 ```
+
+## Building for ESP32-S3 (Xtensa)
+
+The published `memory` 0.9 Xtensa package predates dmod's relocation-table
+support. Its `.got` section is empty, so calling `memory` jumps to the
+unrelocated `print_usage` address (`0x1a4`) and stops the processor in its
+exception handler. Changing the stack size does not fix that package.
+
+Rebuild with the current dmod Xtensa profile (`DMOD_USE_RELDYN=ON`):
+
+```sh
+cmake -S tools/memory -B build-memory-esp -DDMOD_TOOLS_NAME=arch/xtensa/esp32s3
+cmake --build build-memory-esp
+```
+
+The build checks the relocation table in `build-memory-esp/packages/memory.zip`
+and fails if it is missing. CI also builds and uploads this package for
+ESP32-S3. Publish the rebuilt package under a new release version and update
+the registry before expecting existing firmware builds to download the fix;
+reusing the cached 0.9 package will still fail.

@@ -40,6 +40,11 @@ project(memory
 include(${DMOD_DIR}/paths.cmake)
 dmod_setup_external_module()
 
+# Old Xtensa packages linked at zero without relocations and faulted on ESP32-S3.
+if(DMOD_ARCH MATCHES "^xtensa" AND NOT DMOD_USE_RELDYN)
+    message(FATAL_ERROR "memory on Xtensa requires a dmod profile with DMOD_USE_RELDYN enabled; update dmod")
+endif()
+
 # Module name
 set(MEMORY_MODULE_NAME memory)
 
@@ -67,3 +72,15 @@ dmod_add_executable(${MEMORY_MODULE_NAME} ${DMOD_MODULE_VERSION}
 target_include_directories(${MEMORY_MODULE_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include
 )
+
+if(DMOD_ARCH MATCHES "^xtensa")
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_custom_target(memory_check_relocations ALL
+        COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
+            -s ${CMAKE_CURRENT_SOURCE_DIR} -p test_check_relocations.py
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/check_relocations.py
+            ${CMAKE_CURRENT_BINARY_DIR}/packages/memory.zip
+        DEPENDS ${MEMORY_MODULE_NAME}
+        COMMENT "Checking Xtensa relocation data in the memory release package"
+        VERBATIM)
+endif()
