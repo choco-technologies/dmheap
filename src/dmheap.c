@@ -845,12 +845,24 @@ static void delete_module( dmheap_context_t* ctx, module_t* module )
  */
 static module_t* get_or_create_module( dmheap_context_t* ctx, const char* module_name )
 {
-    module_t* module = find_module_by_name( ctx, module_name );
-    if( module == NULL )
+    // The module list is kept in the order of the use: the module that allocated is the one that allocates next (a module's
+    // allocations come in series, and a command that is run again allocates as the one before it did), so it is found at the
+    // head and its name is not compared with the hundreds of the modules that are loaded - a strncmp each, for every allocation.
+    module_t* prev = NULL;
+    for( module_t* module = ctx->module_list; module != NULL; prev = module, module = module->next )
     {
-        module = create_module( ctx, module_name );
+        if( strncmp( module->name, module_name, DMOD_MAX_MODULE_NAME_LENGTH ) == 0 )
+        {
+            if( prev != NULL )
+            {
+                prev->next = module->next;
+                module->next = ctx->module_list;
+                ctx->module_list = module;
+            }
+            return module;
+        }
     }
-    return module;
+    return create_module( ctx, module_name );
 }
 
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buffer, size_t size, size_t alignment ) )
