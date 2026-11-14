@@ -710,7 +710,7 @@ static void test_tags(void) {
     TEST_SECTION("Tags");
     reset_heap(); // test_heap: the sole default heap, untagged - the default memory here
 
-    #define TAGGED_HEAP_SIZE (4 * 1024)
+    #define TAGGED_HEAP_SIZE (6 * 1024)   /* (the context of a heap has the index of the size classes and the memory of the recent frees: about 330 bytes) */
     static char dtcm_heap[TAGGED_HEAP_SIZE];
     static char sram2_heap[TAGGED_HEAP_SIZE];
     dmheap_context_t* sram2 = dmheap_init(sram2_heap, TAGGED_HEAP_SIZE, 8);       /* (init adds it to the default list) */
@@ -958,6 +958,133 @@ static void test_alloc_counters_and_fallbacks(void) {
     TEST_INFO("Allocation counters test completed");
 }
 
+// Test: the memory of the most recently freed blocks
+static void test_recently_freed(void) {
+    printf("\n=== Testing the recently freed blocks ===\n");
+    reset_heap();
+
+    // (The record of a module is a block too: the modules exist before anything is measured)
+    dmheap_free(NULL, dmheap_malloc(NULL, 8, "recent"), true);
+    dmheap_free(NULL, dmheap_malloc(NULL, 8, "ending"), true);
+    dmheap_stats_t base;
+    ASSERT_TEST(dmheap_get_stats(NULL, &base), "Statistics at the start");
+
+    // The same size comes back at once: the block that was just freed
+    void* a = dmheap_malloc(NULL, 96, "recent");
+    void* keep = dmheap_malloc(NULL, 32, "recent");     // (between the block and the rest of the free memory)
+    dmheap_free(NULL, a, false);
+    void* b = dmheap_malloc(NULL, 96, "recent");
+    ASSERT_TEST(b == a, "A block that was just freed is the one that is allocated again");
+    dmheap_free(NULL, b, false);
+
+    // A slightly smaller request uses it too (the size is rounded to the alignment)
+    void* c = dmheap_malloc(NULL, 90, "recent");
+    ASSERT_TEST(c == a, "A slightly smaller request uses it too");
+    dmheap_free(NULL, c, false);
+
+    // What is remembered is still free memory: the statistics count it (and put it in order, so the next request takes the best fit)
+    dmheap_stats_t before, after;
+    ASSERT_TEST(dmheap_get_stats(NULL, &before), "Statistics");
+    ASSERT_TEST(before.used_bytes == base.used_bytes + 32, "The block that is kept is the only one used besides the records");
+    void* d = dmheap_malloc(NULL, 90, "recent");
+    dmheap_free(NULL, d, false);
+    dmheap_concatenate_free_blocks(NULL);
+    ASSERT_TEST(dmheap_get_stats(NULL, &after), "Statistics again");
+    ASSERT_TEST(after.used_bytes == before.used_bytes, "The used bytes are the same");
+    ASSERT_TEST(after.free_bytes == before.free_bytes, "The free bytes are the same after allocating, freeing and merging");
+
+    // A block much bigger than the request is not wasted on it
+    void* big = dmheap_malloc(NULL, 4096, "recent");
+    dmheap_free(NULL, big, false);
+    void* small = dmheap_malloc(NULL, 64, "recent");
+    ASSERT_TEST(small != big, "A small request is not served with a block much bigger (it is taken from the best fit)");
+    dmheap_free(NULL, small, false);
+
+    // More frees than it remembers: all of them are free memory, none is lost
+    void* many[64];
+    for (int i = 0; i < 64; i++) {
+        many[i] = dmheap_malloc(NULL, 24 + (size_t)(i % 7) * 8, "recent");
+        ASSERT_TEST(many[i] != NULL, "Allocate");
+    }
+    for (int i = 0; i < 64; i++) {
+        dmheap_free(NULL, many[i], false);
+    }
+    dmheap_free(NULL, keep, false);
+    dmheap_stats_t stats;
+    ASSERT_TEST(dmheap_get_stats(NULL, &stats), "Statistics after 64 frees");
+    ASSERT_TEST(stats.used_bytes == base.used_bytes, "Nothing is used but what was at the start");
+    ASSERT_TEST(stats.free_block_count >= 1, "There are free blocks");
+    dmheap_concatenate_free_blocks(NULL);
+    ASSERT_TEST(dmheap_get_stats(NULL, &stats), "Statistics after concatenating");
+    ASSERT_TEST(stats.free_block_count <= 3, "Everything freed merges (into the memory around the records of the modules)");
+
+    // Allocating after that works from the whole heap
+    void* all = dmheap_malloc(NULL, TEST_HEAP_SIZE / 2, "recent");
+    ASSERT_TEST(all != NULL, "A big allocation after it");
+    dmheap_free(NULL, all, true);
+
+    // The end of a module: its blocks are free memory again, in order, and what is left of the heap is whole
+    void* blocks[40];
+    for (int i = 0; i < 40; i++) {
+        blocks[i] = dmheap_malloc(NULL, 16 + (size_t)(i % 5) * 40, "ending");
+        ASSERT_TEST(blocks[i] != NULL, "A block of the module");
+    }
+    dmheap_unregister_module(NULL, "ending");
+    ASSERT_TEST(dmheap_get_stats(NULL, &stats), "Statistics after the module ended");
+    ASSERT_TEST(stats.used_bytes < base.used_bytes, "The module's blocks (and its record) are not used any more");
+    ASSERT_TEST(stats.free_block_count <= 3, "The heap is whole again");
+    void* again = dmheap_malloc(NULL, 200, "recent");
+    ASSERT_TEST(again != NULL, "Allocation after the module ended");
+    dmheap_free(NULL, again, true);
+}
+
+// Test: the index of the size classes of the free list (the statistics assert that it is what it must be) under a random load
+static void test_free_list_index(void) {
+    printf("\n=== Testing the index of the size classes ===\n");
+    reset_heap();
+    enum { N = 200 };
+    static void* blocks[N];
+    static unsigned char fill[N];
+    unsigned seed = 12345;
+    memset(blocks, 0, sizeof(blocks));
+    dmheap_stats_t stats;
+    bool intact = true;
+    for( int round = 0; round < 6000; round++ ) {
+        seed = seed * 1103515245u + 12345u;
+        int i = (int)((seed >> 8) % N);
+        if( blocks[i] != NULL ) {
+            for( size_t k = 0; k < 16; k++ ) {
+                if( ((unsigned char*)blocks[i])[k] != fill[i] ) { intact = false; }
+            }
+            dmheap_free(NULL, blocks[i], (round % 97) == 0);
+            blocks[i] = NULL;
+        } else {
+            seed = seed * 1103515245u + 12345u;
+            size_t size = 16U << ((seed >> 8) % 11);          // 16 B .. 16 kB, every class
+            size += (seed >> 20) % size;
+            blocks[i] = dmheap_malloc(NULL, size, (round & 1) ? "index_a" : "index_b");
+            if( blocks[i] != NULL ) {
+                fill[i] = (unsigned char)(round & 0xFF);
+                memset(blocks[i], fill[i], 16);
+            }
+        }
+        if( (round % 50) == 0 ) {
+            dmheap_get_stats(NULL, &stats);                   // (asserts the index)
+        }
+    }
+    ASSERT_TEST(intact, "The contents of the blocks are intact");
+    for( int i = 0; i < N; i++ ) {
+        if( blocks[i] != NULL ) { dmheap_free(NULL, blocks[i], false); }
+    }
+    dmheap_unregister_module(NULL, "index_a");
+    dmheap_unregister_module(NULL, "index_b");
+    ASSERT_TEST(dmheap_get_stats(NULL, &stats), "Statistics at the end");
+    dmheap_concatenate_free_blocks(NULL);
+    ASSERT_TEST(dmheap_get_stats(NULL, &stats), "Statistics after concatenating");
+    ASSERT_TEST(stats.used_bytes == 0, "Nothing is used at the end");
+    ASSERT_TEST(stats.free_block_count == 1, "The heap is whole again");
+}
+
 int main(void) {
     printf("╔════════════════════════════════════════╗\n");
     printf("║     DMHEAP Unit Tests                  ║\n");
@@ -984,6 +1111,8 @@ int main(void) {
     test_context_naming();
     test_tags();
     test_alloc_counters_and_fallbacks();
+    test_recently_freed();
+    test_free_list_index();
     benchmark_allocations();
     
     // Print summary
