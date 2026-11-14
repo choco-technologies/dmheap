@@ -24,6 +24,11 @@ typedef struct block_t
 
 
 /**
+ * @brief How many of the most recently freed blocks a heap remembers (see dmheap_context_t::recent).
+ */
+#define DMHEAP_RECENT_FREED 20
+
+/**
  * @brief Structure to hold the context of the heap.
  */
 typedef struct dmheap_context_t
@@ -36,6 +41,11 @@ typedef struct dmheap_context_t
     module_t* module_list; //!< Pointer to the list of registered modules.
     char name[DMOD_MAX_MODULE_NAME_LENGTH]; //!< Optional name assigned via dmheap_set_context_name().
     dmheap_alloc_counters_t counters;       //!< Cumulative allocation counters (see dmheap_get_alloc_counters()).
+    /** The blocks freed most recently, oldest first. They are free, but not in free_list: an allocation looks here first (the same sizes
+     *  come back over and over - a command that is run again allocates what the one before it freed), and a free is O(1). What does not
+     *  fit here any more goes to free_list. Everything that looks at the free blocks must call flush_recent_locked() first. */
+    block_t* recent[DMHEAP_RECENT_FREED];
+    uint32_t recent_count;                  //!< Blocks in `recent`.
 } dmheap_context_t;
 
 /**
@@ -292,36 +302,73 @@ static void add_free_block( block_t** list_head, block_t* block_to_add )
     block_set_next(current, block_to_add);
 }
 
-/**
- * @brief Insert a block into a linked list of blocks, keeping it sorted by address.
- *
- * Used by concatenate_free_blocks_locked() to line physically adjacent free blocks
- * up next to each other.
- *
- * @param list_head Pointer to the head of the block list.
- * @param block_to_add Pointer to the block to be added.
- */
-static void add_block_by_address( block_t** list_head, block_t* block_to_add )
+/** @brief true when `a` goes before `b` in a list sorted by address */
+static bool block_before_by_address( const block_t* a, const block_t* b )
 {
-    if( list_head == NULL || block_to_add == NULL )
+    return (uintptr_t)a < (uintptr_t)b;
+}
+
+/** @brief true when `a` goes before `b` in a list sorted by size, the smallest first (the order of the free list) */
+static bool block_before_by_size( const block_t* a, const block_t* b )
+{
+    return a->size < b->size;
+}
+
+/**
+ * @brief Sort a linked list of blocks (merge sort: n log n, no memory of its own), in the order `before` gives. The depth of the
+ * recursion is log n.
+ *
+ * @return The head of the sorted list.
+ */
+static block_t* sort_blocks( block_t* head, bool (*before)( const block_t*, const block_t* ) )
+{
+    if( head == NULL || head->next == NULL )
     {
-        return;
+        return head;
     }
 
-    if( *list_head == NULL || (uintptr_t)block_to_add < (uintptr_t)*list_head )
+    // Cut the list in the middle
+    block_t* slow = head;
+    block_t* fast = head->next;
+    while( fast != NULL && fast->next != NULL )
     {
-        block_set_next(block_to_add, *list_head);
-        *list_head = block_to_add;
-        return;
+        slow = slow->next;
+        fast = fast->next->next;
     }
+    block_t* second = slow->next;
+    slow->next = NULL;
 
-    block_t* current = *list_head;
-    while( current->next != NULL && (uintptr_t)current->next < (uintptr_t)block_to_add )
+    block_t* a = sort_blocks( head, before );
+    block_t* b = sort_blocks( second, before );
+
+    // Merge them
+    block_t* result = NULL;
+    block_t* tail = NULL;
+    while( a != NULL && b != NULL )
     {
-        current = current->next;
+        block_t* take;
+        if( before( b, a ) )
+        {
+            take = b;
+            b = b->next;
+        }
+        else
+        {
+            take = a;
+            a = a->next;
+        }
+        if( tail == NULL )
+        {
+            result = take;
+        }
+        else
+        {
+            tail->next = take;
+        }
+        tail = take;
     }
-    block_set_next(block_to_add, current->next);
-    block_set_next(current, block_to_add);
+    tail->next = (a != NULL) ? a : b;
+    return result;
 }
 
 /**
@@ -333,25 +380,111 @@ static void add_block_by_address( block_t** list_head, block_t* block_to_add )
  *
  * @return Pointer to the suitable block, or NULL if none found.
  */
+/**
+ * @brief The size a block must exceed to serve a request (with the padding that its address needs for the alignment).
+ */
+static size_t block_min_size( const block_t* block, size_t size, size_t alignment )
+{
+    void* aligned_address = align_pointer( block->address, alignment );
+    size_t padding = (size_t)((uintptr_t)aligned_address - (uintptr_t)block->address);
+    size_t min_size = size;
+    if(padding > 0)
+    {
+        min_size += padding + sizeof(block_t);
+    }
+    return min_size;
+}
+
 static block_t* find_suitable_block( dmheap_context_t* ctx, size_t size, size_t alignment )
 {
     block_t* current = ctx->free_list;
     while( current != NULL )
     {
-        void* aligned_address = align_pointer( current->address, alignment );
-        size_t padding = (size_t)((uintptr_t)aligned_address - (uintptr_t)current->address);
-        size_t min_size = size;
-        if(padding > 0)
-        {
-            min_size += padding + sizeof(block_t);
-        }
-        if( current->size > min_size )
+        if( current->size > block_min_size( current, size, alignment ) )
         {
             return current;
         }
         current = current->next;
     }
     return NULL;
+}
+
+/**
+ * @brief Put the recently freed blocks into the free list (sorted there). Caller must hold the critical section.
+ */
+static void flush_recent_locked( dmheap_context_t* ctx )
+{
+    for( uint32_t i = 0; i < ctx->recent_count; i++ )
+    {
+        add_free_block( &ctx->free_list, ctx->recent[i] );
+        ctx->recent[i] = NULL;
+    }
+    ctx->recent_count = 0;
+}
+
+/**
+ * @brief A block that was freed: it is remembered as the most recent one; the oldest of the remembered goes to the free list when
+ * there is no room. Caller must hold the critical section.
+ */
+static void free_block_recent( dmheap_context_t* ctx, block_t* block )
+{
+    if( ctx->recent_count == DMHEAP_RECENT_FREED )
+    {
+        add_free_block( &ctx->free_list, ctx->recent[0] );
+        for( uint32_t i = 1; i < DMHEAP_RECENT_FREED; i++ )
+        {
+            ctx->recent[i - 1U] = ctx->recent[i];
+        }
+        ctx->recent_count--;
+    }
+    block_set_next( block, NULL );
+    ctx->recent[ctx->recent_count++] = block;
+}
+
+/**
+ * @brief A recently freed block that serves the request, newest first, taken out of the memory of them. A block that is much
+ * bigger than the request is not taken (it would be split, and the rest sorted into the free list): the free list has the best fit.
+ * Caller must hold the critical section.
+ */
+static block_t* take_recent( dmheap_context_t* ctx, size_t size, size_t alignment )
+{
+    for( uint32_t i = ctx->recent_count; i > 0; i-- )
+    {
+        block_t* block = ctx->recent[i - 1U];
+        size_t min_size = block_min_size( block, size, alignment );
+        // A block of exactly the size serves (when its address needs no padding there is nothing to split); with padding the block
+        // structure of the rest must fit too, as find_suitable_block() demands
+        bool fits = ( min_size == size ) ? ( block->size >= size ) : ( block->size > min_size );
+        if( fits && block->size <= 2U * min_size )
+        {
+            for( uint32_t k = i; k < ctx->recent_count; k++ )
+            {
+                ctx->recent[k - 1U] = ctx->recent[k];
+            }
+            ctx->recent[--ctx->recent_count] = NULL;
+            block_set_next( block, NULL );
+            return block;
+        }
+    }
+    return NULL;
+}
+
+/**
+ * @brief A free block that serves the request, taken out of the free memory: a recently freed one if there is, else the best fit of
+ * the free list. Caller must hold the critical section.
+ */
+static block_t* take_suitable_block( dmheap_context_t* ctx, size_t size, size_t alignment )
+{
+    block_t* block = take_recent( ctx, size, alignment );
+    if( block == NULL )
+    {
+        block = find_suitable_block( ctx, size, alignment );
+        if( block != NULL )
+        {
+            remove_block( &ctx->free_list, block );
+        }
+    }
+    return block;
 }
 
 /**
@@ -366,20 +499,16 @@ static block_t* find_suitable_block( dmheap_context_t* ctx, size_t size, size_t 
  */
 static void concatenate_free_blocks_locked( dmheap_context_t* ctx )
 {
+    // (The free list is sorted twice, by merge sort - n log n: with hundreds of free blocks in the external RAM, insertion one by one is
+    // n squared of slow reads, and this runs every time a module ends.)
     // The free list is sorted by size (add_free_block()), not by address, so a block
     // and its physical upper neighbour can sit in either order in it. Scanning only
     // forward from each block misses every pair whose lower block is the larger one -
     // the heap then stays fragmented even after coalescing. Re-sorting by address
     // first puts every mergeable pair next to each other, so a single linear pass
     // merges all of them.
-    block_t* by_address = NULL;
-    block_t* unsorted = ctx->free_list;
-    while( unsorted != NULL )
-    {
-        block_t* next = unsorted->next;
-        add_block_by_address( &by_address, unsorted );
-        unsorted = next;
-    }
+    flush_recent_locked( ctx );
+    block_t* by_address = sort_blocks( ctx->free_list, block_before_by_address );
 
     block_t* current = by_address;
     while( current != NULL && current->next != NULL )
@@ -398,13 +527,7 @@ static void concatenate_free_blocks_locked( dmheap_context_t* ctx )
     }
 
     // Rebuild the free list in the size order the rest of the heap relies on.
-    ctx->free_list = NULL;
-    while( by_address != NULL )
-    {
-        block_t* next = by_address->next;
-        add_free_block( &ctx->free_list, by_address );
-        by_address = next;
-    }
+    ctx->free_list = sort_blocks( by_address, block_before_by_size );
 }
 
 /**
@@ -511,13 +634,12 @@ static void remove_module_from_list( module_t** list_head, module_t* module_to_r
  */
 static module_t* create_module( dmheap_context_t* ctx, const char* name )
 {
-    block_t* block = find_suitable_block( ctx, sizeof(module_t), ctx->alignment );
+    block_t* block = take_suitable_block( ctx, sizeof(module_t), ctx->alignment );
     if( block == NULL )
     {
         DMOD_LOG_ERROR("dmheap: Unable to allocate memory for module %s.\n", name);
         return NULL;
     }
-    remove_block( &ctx->free_list, block );
     block->owner = NULL;
     if(block->size > (sizeof(module_t) + sizeof(block_t) + ctx->alignment))
     {
@@ -566,7 +688,10 @@ static void release_memory_of_module( dmheap_context_t* ctx, module_t* module )
                 block_set_next(prev, current->next);
                 current = prev->next;
             }
-            add_free_block( &ctx->free_list, to_free );
+            // Onto the front of the free list, not sorted into it: this is the end of a module and its blocks are many (hundreds, each
+            // sorted in at the cost of walking the list) - the caller sorts the list afterwards, see delete_module()
+            block_set_next( to_free, ctx->free_list );
+            ctx->free_list = to_free;
         }
         else
         {
@@ -596,8 +721,12 @@ static void delete_module( dmheap_context_t* ctx, module_t* module )
     if( block != NULL )
     {
         remove_block( &ctx->used_list, block );
-        add_free_block( &ctx->free_list, block );
+        block_set_next( block, ctx->free_list );
+        ctx->free_list = block;
     }
+
+    // The blocks of the module were put in front of the list: in the order of the sizes again, once
+    ctx->free_list = sort_blocks( ctx->free_list, block_before_by_size );
 }
 
 /**
@@ -655,6 +784,8 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buff
     ctx->used_list  = NULL;
     ctx->alignment  = alignment;
     ctx->module_list = NULL;  // Reset module list on initialization
+    ctx->recent_count = 0;
+    memset( ctx->recent, 0, sizeof(ctx->recent) );
     ctx->name[0] = '\0';      // No name assigned until dmheap_set_context_name() is called
     memset( &ctx->counters, 0, sizeof(ctx->counters) );
 
@@ -953,7 +1084,7 @@ static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, 
 {
     Dmod_EnterCritical();
     size_t aligned_size = align_size( size, alignment );
-    block_t* block = find_suitable_block( ctx, aligned_size, alignment );
+    block_t* block = take_suitable_block( ctx, aligned_size, alignment );
     if( block == NULL )
     {
         // Dmod_Free() never coalesces on its own (Concatenate=false) - a request can
@@ -962,7 +1093,7 @@ static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, 
         // search once more - this only pays the O(n) coalescing cost on the rare
         // allocation that actually needs it, instead of on every single free.
         concatenate_free_blocks_locked( ctx );
-        block = find_suitable_block( ctx, aligned_size, alignment );
+        block = take_suitable_block( ctx, aligned_size, alignment );
     }
     if( block == NULL )
     {
@@ -973,8 +1104,7 @@ static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, 
     void* aligned_address = align_pointer( block->address, alignment );
     size_t padding = (size_t)((uintptr_t)aligned_address - (uintptr_t)block->address);
 
-    // First remove the block from free_list before splitting
-    remove_block( &ctx->free_list, block );
+    // (The block is already out of the free memory: take_suitable_block() took it)
 
     // If there's any padding, we need to handle it
     if( padding > 0 )
@@ -1076,6 +1206,7 @@ static void measure_free_locked( dmheap_context_t* ctx, size_t* free_bytes, size
 {
     *free_bytes = 0;
     *largest_free = 0;
+    flush_recent_locked( ctx );
     for( block_t* block = ctx->free_list; block != NULL; block = block->next )
     {
         *free_bytes += block->size;
@@ -1335,7 +1466,7 @@ static void* realloc_block_locked( dmheap_context_t* ctx, block_t* block, void* 
         {
             memcpy( new_ptr, ptr, block->size );
             remove_block( &ctx->used_list, block );
-            add_free_block( &ctx->free_list, block );
+            free_block_recent( ctx, block );
         }
         else
         {
@@ -1417,7 +1548,7 @@ static bool free_block_in_context( dmheap_context_t* ctx, void* ptr, bool concat
     }
 
     remove_block( &ctx->used_list, block );
-    add_free_block( &ctx->free_list, block );
+    free_block_recent( ctx, block );
 
     if(concatenate)
     {
@@ -1671,6 +1802,7 @@ static void accumulate_stats_locked( dmheap_context_t* ctx, dmheap_stats_t* out_
 {
     out_stats->heap_size += ctx->heap_size;
 
+    flush_recent_locked( ctx );
     for( block_t* block = ctx->free_list; block != NULL; block = block->next )
     {
         out_stats->free_bytes += block->size;
@@ -1736,6 +1868,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void, _for_each_free_block, ( dmheap_co
     if( ctx != NULL )
     {
         Dmod_EnterCritical();
+        flush_recent_locked( ctx );
         for( block_t* block = ctx->free_list; block != NULL; block = block->next )
         {
             visitor( block->address, block->size, NULL, user_data );
@@ -1747,6 +1880,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void, _for_each_free_block, ( dmheap_co
     Dmod_EnterCritical();
     for( int32_t i = (g_default_context_count - 1); i >= 0; i-- )
     {
+        flush_recent_locked( g_default_contexts[i] );
         for( block_t* block = g_default_contexts[i]->free_list; block != NULL; block = block->next )
         {
             visitor( block->address, block->size, NULL, user_data );
