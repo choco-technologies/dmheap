@@ -29,13 +29,22 @@ typedef struct block_t
 #define DMHEAP_RECENT_FREED 20
 
 /**
+ * @brief The number of the size classes of the free list: the powers of two up to the size of a pointer's worth of bits.
+ */
+#define DMHEAP_SIZE_CLASSES ((unsigned)(sizeof(size_t) * 8U))
+
+/**
  * @brief Structure to hold the context of the heap.
  */
 typedef struct dmheap_context_t
 {
     void*  heap_start;      //!< Pointer to the start of the heap memory.
     size_t heap_size;       //!< Size of the heap memory.
-    block_t* free_list;     //!< Pointer to the list of free memory blocks.
+    block_t* free_list;     //!< Pointer to the list of free memory blocks (sorted by size, the smallest first).
+    /** pred[j]: the last block of free_list that is smaller than 2^j, NULL when there is none. The first block of 2^j and more is the one
+     *  after it (or free_list). So a search for a size, and the insertion of a block, start at the class of the size and not at the head
+     *  of the list. Valid whenever the list is sorted (it is rebuilt by free_list_rebuild_index() after the list is sorted as a whole). */
+    block_t* pred[sizeof(size_t) * 8U];
     block_t* used_list;     //!< Pointer to the list of used memory blocks.
     size_t alignment;       //!< Alignment for allocations.
     module_t* module_list; //!< Pointer to the list of registered modules.
@@ -267,6 +276,40 @@ static void add_block( block_t** list_head, block_t* block_to_add )
     *list_head = block_to_add;
 }
 
+/** @brief floor(log2(size)): the class of a size (0 for 0 and 1) */
+static unsigned size_class( size_t size )
+{
+    unsigned k = 0;
+    while( size > 1U )
+    {
+        size >>= 1;
+        k++;
+    }
+    return k;
+}
+
+/**
+ * @brief Work out ctx->pred from the free list, which must be sorted by size. One walk of the list.
+ */
+static void free_list_rebuild_index( dmheap_context_t* ctx )
+{
+    block_t* last = NULL;
+    unsigned j = 0;
+    for( block_t* block = ctx->free_list; block != NULL; block = block->next )
+    {
+        // The classes whose size this block reaches: the block before it was the last smaller one
+        while( j < DMHEAP_SIZE_CLASSES && block->size >= ((size_t)1 << j) )
+        {
+            ctx->pred[j++] = last;
+        }
+        last = block;
+    }
+    while( j < DMHEAP_SIZE_CLASSES )
+    {
+        ctx->pred[j++] = last;      // (no block reaches them: the last one is smaller than all of these)
+    }
+}
+
 /**
  * @brief Insert a block into the free list, keeping it sorted from smallest to
  * largest by size.
@@ -276,30 +319,98 @@ static void add_block( block_t** list_head, block_t* block_to_add )
  * free blocks are kept intact for large requests instead of being handed out (and
  * fragmented) for small ones.
  *
- * @param list_head Pointer to the head of the free block list.
+ * The walk starts at the class of the size (ctx->pred), not at the head: it passes only the blocks that are
+ * less than twice the size.
+ *
+ * @param ctx          Pointer to the heap context.
  * @param block_to_add Pointer to the block to be added.
  */
-static void add_free_block( block_t** list_head, block_t* block_to_add )
+static void free_list_add( dmheap_context_t* ctx, block_t* block_to_add )
 {
-    if( list_head == NULL || block_to_add == NULL )
+    if( ctx == NULL || block_to_add == NULL )
     {
         return;
     }
 
-    if( *list_head == NULL || block_to_add->size <= (*list_head)->size )
+    const size_t size = block_to_add->size;
+    const unsigned k = size_class( size );
+    block_t* prev = ctx->pred[k];                       // smaller than 2^k, so smaller than the block
+    block_t* next = (prev != NULL) ? prev->next : ctx->free_list;
+    while( next != NULL && next->size < size )
     {
-        block_set_next(block_to_add, *list_head);
-        *list_head = block_to_add;
-        return;
+        prev = next;
+        next = next->next;
     }
+    block_set_next( block_to_add, next );
+    if( prev != NULL )
+    {
+        block_set_next( prev, block_to_add );
+    }
+    else
+    {
+        ctx->free_list = block_to_add;
+    }
+    // The block is smaller than 2^j for every class above its own: where `prev` was the last smaller block, the block is
+    for( unsigned j = k + 1U; j < DMHEAP_SIZE_CLASSES; j++ )
+    {
+        if( ctx->pred[j] == prev )
+        {
+            ctx->pred[j] = block_to_add;
+        }
+    }
+}
 
-    block_t* current = *list_head;
-    while( current->next != NULL && current->next->size < block_to_add->size )
+/**
+ * @brief Is the free list sorted by size and ctx->pred what it must be? (the statistics assert it)
+ */
+static bool free_list_is_consistent( const dmheap_context_t* ctx )
+{
+    const block_t* last = NULL;
+    for( const block_t* block = ctx->free_list; block != NULL; block = block->next )
     {
-        current = current->next;
+        if( last != NULL && last->size > block->size )
+        {
+            return false;
+        }
+        last = block;
     }
-    block_set_next(block_to_add, current->next);
-    block_set_next(current, block_to_add);
+    for( unsigned j = 0; j < DMHEAP_SIZE_CLASSES; j++ )
+    {
+        // the last block smaller than 2^j
+        const block_t* expected = NULL;
+        for( const block_t* block = ctx->free_list; block != NULL && block->size < ((size_t)1 << j); block = block->next )
+        {
+            expected = block;
+        }
+        if( ctx->pred[j] != expected )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief Take a block out of the free list, `prev` being the block before it (NULL: it is the first).
+ */
+static void free_list_unlink( dmheap_context_t* ctx, block_t* prev, block_t* block )
+{
+    if( prev != NULL )
+    {
+        prev->next = block->next;
+    }
+    else
+    {
+        ctx->free_list = block->next;
+    }
+    for( unsigned j = 0; j < DMHEAP_SIZE_CLASSES; j++ )
+    {
+        if( ctx->pred[j] == block )
+        {
+            ctx->pred[j] = prev;
+        }
+    }
+    block->next = NULL;
 }
 
 /** @brief true when `a` goes before `b` in a list sorted by address */
@@ -395,20 +506,6 @@ static size_t block_min_size( const block_t* block, size_t size, size_t alignmen
     return min_size;
 }
 
-static block_t* find_suitable_block( dmheap_context_t* ctx, size_t size, size_t alignment )
-{
-    block_t* current = ctx->free_list;
-    while( current != NULL )
-    {
-        if( current->size > block_min_size( current, size, alignment ) )
-        {
-            return current;
-        }
-        current = current->next;
-    }
-    return NULL;
-}
-
 /**
  * @brief Put the recently freed blocks into the free list (sorted there). Caller must hold the critical section.
  */
@@ -416,7 +513,7 @@ static void flush_recent_locked( dmheap_context_t* ctx )
 {
     for( uint32_t i = 0; i < ctx->recent_count; i++ )
     {
-        add_free_block( &ctx->free_list, ctx->recent[i] );
+        free_list_add( ctx, ctx->recent[i] );
         ctx->recent[i] = NULL;
     }
     ctx->recent_count = 0;
@@ -430,7 +527,7 @@ static void free_block_recent( dmheap_context_t* ctx, block_t* block )
 {
     if( ctx->recent_count == DMHEAP_RECENT_FREED )
     {
-        add_free_block( &ctx->free_list, ctx->recent[0] );
+        free_list_add( ctx, ctx->recent[0] );
         for( uint32_t i = 1; i < DMHEAP_RECENT_FREED; i++ )
         {
             ctx->recent[i - 1U] = ctx->recent[i];
@@ -478,10 +575,17 @@ static block_t* take_suitable_block( dmheap_context_t* ctx, size_t size, size_t 
     block_t* block = take_recent( ctx, size, alignment );
     if( block == NULL )
     {
-        block = find_suitable_block( ctx, size, alignment );
+        // A block has to be bigger than the size: the ones smaller than 2^class are not worth looking at (ctx->pred)
+        block_t* prev = ctx->pred[size_class( size )];
+        block = (prev != NULL) ? prev->next : ctx->free_list;
+        while( block != NULL && block->size <= block_min_size( block, size, alignment ) )
+        {
+            prev = block;
+            block = block->next;
+        }
         if( block != NULL )
         {
-            remove_block( &ctx->free_list, block );
+            free_list_unlink( ctx, prev, block );
         }
     }
     return block;
@@ -501,7 +605,7 @@ static void concatenate_free_blocks_locked( dmheap_context_t* ctx )
 {
     // (The free list is sorted twice, by merge sort - n log n: with hundreds of free blocks in the external RAM, insertion one by one is
     // n squared of slow reads, and this runs every time a module ends.)
-    // The free list is sorted by size (add_free_block()), not by address, so a block
+    // The free list is sorted by size (free_list_add()), not by address, so a block
     // and its physical upper neighbour can sit in either order in it. Scanning only
     // forward from each block misses every pair whose lower block is the larger one -
     // the heap then stays fragmented even after coalescing. Re-sorting by address
@@ -528,6 +632,7 @@ static void concatenate_free_blocks_locked( dmheap_context_t* ctx )
 
     // Rebuild the free list in the size order the rest of the heap relies on.
     ctx->free_list = sort_blocks( by_address, block_before_by_size );
+    free_list_rebuild_index( ctx );
 }
 
 /**
@@ -646,7 +751,7 @@ static module_t* create_module( dmheap_context_t* ctx, const char* name )
         block_t* new_block = split_block( ctx, block, sizeof(module_t) );
         if( new_block != NULL )
         {
-            add_free_block( &ctx->free_list, new_block );
+            free_list_add( ctx, new_block );
         }
     }
     module_t* module = (module_t*)block->address;
@@ -727,6 +832,7 @@ static void delete_module( dmheap_context_t* ctx, module_t* module )
 
     // The blocks of the module were put in front of the list: in the order of the sizes again, once
     ctx->free_list = sort_blocks( ctx->free_list, block_before_by_size );
+    free_list_rebuild_index( ctx );
 }
 
 /**
@@ -784,6 +890,7 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buff
     ctx->used_list  = NULL;
     ctx->alignment  = alignment;
     ctx->module_list = NULL;  // Reset module list on initialization
+    free_list_rebuild_index( ctx );
     ctx->recent_count = 0;
     memset( ctx->recent, 0, sizeof(ctx->recent) );
     ctx->name[0] = '\0';      // No name assigned until dmheap_set_context_name() is called
@@ -1122,7 +1229,7 @@ static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, 
             if( usable_block != NULL )
             {
                 // block now contains the padding area, add it to free list
-                add_free_block( &ctx->free_list, block );
+                free_list_add( ctx, block );
                 // usable_block is what we'll actually use for allocation
                 block = usable_block;
                 // The usable_block's data (block->address) should now be at aligned_address
@@ -1130,7 +1237,7 @@ static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, 
             else
             {
                 // If split failed, put the block back to free_list
-                add_free_block( &ctx->free_list, block );
+                free_list_add( ctx, block );
                 // If we are here, something went wrong, 
                 // because find_suitable_block should have ensured enough space
                 // for splitting if padding was needed.
@@ -1158,14 +1265,14 @@ static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, 
                 block_t* usable_block = split_block( ctx, block, split_at );
                 if( usable_block != NULL )
                 {
-                    add_free_block( &ctx->free_list, block );
+                    free_list_add( ctx, block );
                     block = usable_block;
                     aligned_address = block->address;  // Update aligned_address to the actual position
                 }
                 else
                 {
                     // Can't split, return the block to free list and fail
-                    add_free_block( &ctx->free_list, block );
+                    free_list_add( ctx, block );
                     Dmod_ExitCritical();
                     return NULL;
                 }
@@ -1173,7 +1280,7 @@ static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, 
             else
             {
                 // Not enough space, return the block and fail
-                add_free_block( &ctx->free_list, block );
+                free_list_add( ctx, block );
                 Dmod_ExitCritical();
                 return NULL;
             }
@@ -1185,7 +1292,7 @@ static void* aligned_alloc_in_context( dmheap_context_t* ctx, size_t alignment, 
         block_t* new_block = split_block( ctx, block, aligned_size );
         if( new_block != NULL )
         {
-            add_free_block( &ctx->free_list, new_block );
+            free_list_add( ctx, new_block );
         }
     }
 
@@ -1454,7 +1561,7 @@ static void* realloc_block_locked( dmheap_context_t* ctx, block_t* block, void* 
         block_t* new_block = split_block( ctx, block, size );
         if( new_block != NULL )
         {
-            add_free_block( &ctx->free_list, new_block );
+            free_list_add( ctx, new_block );
         }
         add_block( &ctx->used_list, block );
         new_ptr = ptr;
@@ -1751,7 +1858,7 @@ static bool rename_tag_in_context( dmheap_context_t* ctx, const char* old_module
         if( module_block != NULL )
         {
             remove_block( &ctx->used_list, module_block );
-            add_free_block( &ctx->free_list, module_block );
+            free_list_add( ctx, module_block );
         }
     }
 
@@ -1803,6 +1910,7 @@ static void accumulate_stats_locked( dmheap_context_t* ctx, dmheap_stats_t* out_
     out_stats->heap_size += ctx->heap_size;
 
     flush_recent_locked( ctx );
+    DMOD_ASSERT_MSG( free_list_is_consistent( ctx ), "dmheap: the free list or its index of the size classes is broken" );
     for( block_t* block = ctx->free_list; block != NULL; block = block->next )
     {
         out_stats->free_bytes += block->size;

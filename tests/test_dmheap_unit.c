@@ -710,7 +710,7 @@ static void test_tags(void) {
     TEST_SECTION("Tags");
     reset_heap(); // test_heap: the sole default heap, untagged - the default memory here
 
-    #define TAGGED_HEAP_SIZE (4 * 1024)
+    #define TAGGED_HEAP_SIZE (6 * 1024)   /* (the context of a heap has the index of the size classes and the memory of the recent frees: about 330 bytes) */
     static char dtcm_heap[TAGGED_HEAP_SIZE];
     static char sram2_heap[TAGGED_HEAP_SIZE];
     dmheap_context_t* sram2 = dmheap_init(sram2_heap, TAGGED_HEAP_SIZE, 8);       /* (init adds it to the default list) */
@@ -1038,6 +1038,53 @@ static void test_recently_freed(void) {
     dmheap_free(NULL, again, true);
 }
 
+// Test: the index of the size classes of the free list (the statistics assert that it is what it must be) under a random load
+static void test_free_list_index(void) {
+    printf("\n=== Testing the index of the size classes ===\n");
+    reset_heap();
+    enum { N = 200 };
+    static void* blocks[N];
+    static unsigned char fill[N];
+    unsigned seed = 12345;
+    memset(blocks, 0, sizeof(blocks));
+    dmheap_stats_t stats;
+    bool intact = true;
+    for( int round = 0; round < 6000; round++ ) {
+        seed = seed * 1103515245u + 12345u;
+        int i = (int)((seed >> 8) % N);
+        if( blocks[i] != NULL ) {
+            for( size_t k = 0; k < 16; k++ ) {
+                if( ((unsigned char*)blocks[i])[k] != fill[i] ) { intact = false; }
+            }
+            dmheap_free(NULL, blocks[i], (round % 97) == 0);
+            blocks[i] = NULL;
+        } else {
+            seed = seed * 1103515245u + 12345u;
+            size_t size = 16U << ((seed >> 8) % 11);          // 16 B .. 16 kB, every class
+            size += (seed >> 20) % size;
+            blocks[i] = dmheap_malloc(NULL, size, (round & 1) ? "index_a" : "index_b");
+            if( blocks[i] != NULL ) {
+                fill[i] = (unsigned char)(round & 0xFF);
+                memset(blocks[i], fill[i], 16);
+            }
+        }
+        if( (round % 50) == 0 ) {
+            dmheap_get_stats(NULL, &stats);                   // (asserts the index)
+        }
+    }
+    ASSERT_TEST(intact, "The contents of the blocks are intact");
+    for( int i = 0; i < N; i++ ) {
+        if( blocks[i] != NULL ) { dmheap_free(NULL, blocks[i], false); }
+    }
+    dmheap_unregister_module(NULL, "index_a");
+    dmheap_unregister_module(NULL, "index_b");
+    ASSERT_TEST(dmheap_get_stats(NULL, &stats), "Statistics at the end");
+    dmheap_concatenate_free_blocks(NULL);
+    ASSERT_TEST(dmheap_get_stats(NULL, &stats), "Statistics after concatenating");
+    ASSERT_TEST(stats.used_bytes == 0, "Nothing is used at the end");
+    ASSERT_TEST(stats.free_block_count == 1, "The heap is whole again");
+}
+
 int main(void) {
     printf("╔════════════════════════════════════════╗\n");
     printf("║     DMHEAP Unit Tests                  ║\n");
@@ -1065,6 +1112,7 @@ int main(void) {
     test_tags();
     test_alloc_counters_and_fallbacks();
     test_recently_freed();
+    test_free_list_index();
     benchmark_allocations();
     
     // Print summary
