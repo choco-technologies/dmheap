@@ -585,6 +585,19 @@ Initialize the heap with a given buffer and size. The context structure is store
 - **Thread-safe:** Yes
 - **Note:** Every initialized context joins the default heap list automatically; the first one is the primary default context
 
+#### `dmheap_set_context_reserved`
+
+```c
+bool dmheap_set_context_reserved(dmheap_context_t* ctx, bool reserved);
+bool dmheap_is_context_reserved(dmheap_context_t* ctx);
+```
+
+Reserve a heap for explicit use: it stays on the default heap list (`dmheap_get_context_by_name` and the tags find it, NULL-context
+free/realloc/retag find the blocks it owns), but NULL-context allocations (`dmheap_malloc(NULL, ...)`, `Dmod_Malloc`, ...) skip it. For a
+small special region that ordinary allocations must not fill up, e.g. a DMA-capable region a display driver needs a big block of.
+
+- **Returns:** `true` on success, `false` if `ctx` is `NULL` (`dmheap_is_context_reserved`: the flag, `false` for `NULL`)
+
 #### `dmheap_set_context_name`
 
 ```c

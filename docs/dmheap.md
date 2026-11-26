@@ -81,6 +81,11 @@ has already been allocated under a different or absent identity.
   list (e.g. before tearing it down), without affecting the heap itself.
 - `dmheap_set_default_context(ctx)` - replace the default heap list with a
   single entry (or clear it, if `ctx` is `NULL`).
+- `dmheap_set_context_reserved(ctx, reserved)` - a reserved heap stays on the
+  default heap list (found by name and tag, NULL-context free/realloc/retag
+  find its blocks) but the NULL-context allocations skip it: memory of a kind
+  (e.g. a second DMA region) that only those who ask for it by name get.
+  `dmheap_is_context_reserved(ctx)` tells.
 - `dmheap_get_default_context()` - the first (primary) heap in the default
   list, or `NULL` if it's empty.
 - `dmheap_get_default_context_count()` / `dmheap_get_default_context_at(index)`
