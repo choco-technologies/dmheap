@@ -66,6 +66,19 @@ static dmheap_context_t* g_default_contexts[DMHEAP_MAX_DEFAULT_CONTEXTS];
 static int32_t g_default_context_count = 0;
 
 /**
+ * @brief Maximum number of callbacks that can wait for a heap to be added (see dmheap_register_heap_added_callback()).
+ */
+#define DMHEAP_MAX_HEAP_ADDED_CALLBACKS 4
+
+typedef struct
+{
+    dmheap_heap_added_callback_t callback;  //!< NULL for an unused slot.
+    void* arg;                              //!< Passed to the callback.
+} heap_added_listener_t;
+
+static heap_added_listener_t g_heap_added_listeners[DMHEAP_MAX_HEAP_ADDED_CALLBACKS];
+
+/**
  * @brief Ring of the most recent fallback events (see dmheap_get_fallback_events()).
  */
 static dmheap_fallback_event_t g_fallback_events[DMHEAP_MAX_FALLBACK_EVENTS];
@@ -102,6 +115,31 @@ static bool add_default_context_locked( dmheap_context_t* ctx )
 
     g_default_contexts[g_default_context_count++] = ctx;
     return true;
+}
+
+/**
+ * @brief Tell the registered listeners that a heap has been put on the default heap list.
+ *
+ * The listeners are copied under the critical section and called outside of it: a listener
+ * is free to allocate, create threads and so on.
+ *
+ * @param ctx The heap that has been added.
+ */
+static void notify_heap_added( dmheap_context_t* ctx )
+{
+    heap_added_listener_t listeners[DMHEAP_MAX_HEAP_ADDED_CALLBACKS];
+
+    Dmod_EnterCritical();
+    memcpy( listeners, g_heap_added_listeners, sizeof(listeners) );
+    Dmod_ExitCritical();
+
+    for( size_t i = 0; i < DMHEAP_MAX_HEAP_ADDED_CALLBACKS; i++ )
+    {
+        if( listeners[i].callback != NULL )
+        {
+            listeners[i].callback( ctx, listeners[i].arg );
+        }
+    }
 }
 
 /**
@@ -908,11 +946,15 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, dmheap_context_t*,  _init, ( void* buff
     ctx->name[0] = '\0';      // No name assigned until dmheap_set_context_name() is called
     memset( &ctx->counters, 0, sizeof(ctx->counters) );
 
-    add_default_context_locked( ctx );
+    bool added = add_default_context_locked( ctx );
 
     Dmod_ExitCritical();
     DMOD_LOG_INFO("== dmheap ver. %s ==\n", DMHEAP_VERSION);
     DMOD_LOG_INFO("dmheap: Initialized with buffer %p of size %lu.\n", heap_buffer, (unsigned long)heap_size);
+    if( added )
+    {
+        notify_heap_added( ctx );
+    }
     return ctx;
 }
 
@@ -961,9 +1003,67 @@ DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _set_default_context, ( dmheap_c
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _add_default_context, ( dmheap_context_t* ctx ) )
 {
     Dmod_EnterCritical();
+    int32_t count_before = g_default_context_count;
     bool added = add_default_context_locked( ctx );
+    bool is_new = added && g_default_context_count != count_before;
     Dmod_ExitCritical();
+    if( is_new )
+    {
+        notify_heap_added( ctx );
+    }
     return added;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _register_heap_added_callback, ( dmheap_heap_added_callback_t callback, void* arg ) )
+{
+    if( callback == NULL )
+    {
+        return false;
+    }
+
+    bool registered = false;
+    Dmod_EnterCritical();
+    heap_added_listener_t* free_slot = NULL;
+    for( size_t i = 0; i < DMHEAP_MAX_HEAP_ADDED_CALLBACKS; i++ )
+    {
+        if( g_heap_added_listeners[i].callback == callback && g_heap_added_listeners[i].arg == arg )
+        {
+            registered = true;      // Already there
+            free_slot = NULL;
+            break;
+        }
+        if( g_heap_added_listeners[i].callback == NULL && free_slot == NULL )
+        {
+            free_slot = &g_heap_added_listeners[i];
+        }
+    }
+    if( free_slot != NULL )
+    {
+        free_slot->callback = callback;
+        free_slot->arg = arg;
+        registered = true;
+    }
+    Dmod_ExitCritical();
+
+    if( !registered )
+    {
+        DMOD_LOG_ERROR("dmheap: no free slot for a heap-added callback (max %d).\n", DMHEAP_MAX_HEAP_ADDED_CALLBACKS);
+    }
+    return registered;
+}
+
+DMOD_INPUT_API_DECLARATION( dmheap, 1.0, void,  _unregister_heap_added_callback, ( dmheap_heap_added_callback_t callback, void* arg ) )
+{
+    Dmod_EnterCritical();
+    for( size_t i = 0; i < DMHEAP_MAX_HEAP_ADDED_CALLBACKS; i++ )
+    {
+        if( g_heap_added_listeners[i].callback == callback && g_heap_added_listeners[i].arg == arg )
+        {
+            g_heap_added_listeners[i].callback = NULL;
+            g_heap_added_listeners[i].arg = NULL;
+        }
+    }
+    Dmod_ExitCritical();
 }
 
 DMOD_INPUT_API_DECLARATION( dmheap, 1.0, bool,  _remove_default_context, ( dmheap_context_t* ctx ) )
