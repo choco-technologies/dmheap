@@ -662,6 +662,69 @@ static void test_default_heap_list(void) {
     TEST_INFO("Default heap list test completed");
 }
 
+// Test: Callbacks for a heap added to the default list
+typedef struct {
+    int calls;
+    dmheap_context_t* last;
+} added_log_t;
+
+static void record_added_heap(dmheap_context_t* ctx, void* arg) {
+    added_log_t* log = arg;
+    log->calls++;
+    log->last = ctx;
+}
+
+static void noop_added_heap(dmheap_context_t* ctx, void* arg) {
+    (void)ctx;
+    (void)arg;
+}
+
+static void test_heap_added_callback(void) {
+    TEST_SECTION("Heap Added Callback");
+    reset_heap();
+
+    static char added_heap[4 * 1024];
+    added_log_t log = { 0, NULL };
+
+    ASSERT_TEST(dmheap_register_heap_added_callback(NULL, &log) == false, "A NULL callback is refused");
+    ASSERT_TEST(dmheap_register_heap_added_callback(record_added_heap, &log) == true, "Register the callback");
+    ASSERT_TEST(dmheap_register_heap_added_callback(record_added_heap, &log) == true, "Registering it again is a no-op success");
+
+    dmheap_context_t* added = dmheap_init(added_heap, sizeof(added_heap), 8);
+    ASSERT_TEST(added != NULL, "Initialize a heap");
+    ASSERT_TEST(log.calls == 1, "The callback is called once for the new heap");
+    ASSERT_TEST(log.last == added, "The callback gets the new heap");
+
+    ASSERT_TEST(dmheap_add_default_context(added) == true, "Re-adding the heap is a no-op success");
+    ASSERT_TEST(log.calls == 1, "A heap that is on the list already is not announced again");
+
+    ASSERT_TEST(dmheap_remove_default_context(added) == true, "Take the heap off the list");
+    ASSERT_TEST(dmheap_add_default_context(added) == true, "Put it back");
+    ASSERT_TEST(log.calls == 2, "A heap put back on the list is announced");
+
+    dmheap_unregister_heap_added_callback(record_added_heap, &log);
+    ASSERT_TEST(dmheap_remove_default_context(added) == true, "Take the heap off the list again");
+    ASSERT_TEST(dmheap_add_default_context(added) == true, "Put it back again");
+    ASSERT_TEST(log.calls == 2, "An unregistered callback is not called");
+
+    // The table is small and fixed: with every slot taken a new callback is refused
+    int taken = 0;
+    static int slot_args[16];
+    for (int i = 0; i < 16; i++) {
+        if (dmheap_register_heap_added_callback(noop_added_heap, &slot_args[i])) {
+            taken++;
+        }
+    }
+    ASSERT_TEST(taken > 0 && taken < 16, "Registering more callbacks than there are slots fails at some point");
+    for (int i = 0; i < 16; i++) {
+        dmheap_unregister_heap_added_callback(noop_added_heap, &slot_args[i]);
+    }
+    ASSERT_TEST(dmheap_register_heap_added_callback(noop_added_heap, &slot_args[0]) == true, "Unregistering frees the slots");
+    dmheap_unregister_heap_added_callback(noop_added_heap, &slot_args[0]);
+
+    TEST_INFO("Heap added callback test completed");
+}
+
 // Test: Named contexts
 static void test_context_naming(void) {
     TEST_SECTION("Context Naming");
@@ -1108,6 +1171,7 @@ int main(void) {
     test_fragmentation();
     test_multiple_contexts();
     test_default_heap_list();
+    test_heap_added_callback();
     test_context_naming();
     test_tags();
     test_alloc_counters_and_fallbacks();

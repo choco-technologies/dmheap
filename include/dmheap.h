@@ -75,6 +75,39 @@ DMOD_BUILTIN_API( dmheap, 1.0, void             , _set_default_context, ( dmheap
  *         NULL or the default heap list is full.
  */
 DMOD_BUILTIN_API( dmheap, 1.0, bool             , _add_default_context, ( dmheap_context_t* ctx ) );
+
+/**
+ * @brief Callback called when a heap has been put on the default heap list.
+ *
+ * Called by dmheap_init() and dmheap_add_default_context(), from the thread that added the heap, after the heap is on the
+ * list (an allocation that names no heap tries it first) and outside of dmheap's critical section: it may allocate.
+ * The heap can still be taken off the list again by whoever added it (for instance a heap that is only asked for by its tags).
+ *
+ * @param ctx The heap that has been added.
+ * @param arg The argument given when the callback was registered.
+ */
+typedef void (*dmheap_heap_added_callback_t)( dmheap_context_t* ctx, void* arg );
+
+/**
+ * @brief Ask to be told when a heap is added to the default heap list.
+ *
+ * Lets what holds memory allocated before a bigger or slower heap existed (a thread stack, say) move it there. Registering
+ * the same callback with the same argument twice is a no-op.
+ *
+ * @param callback Called for every heap added from now on (see dmheap_heap_added_callback_t).
+ * @param arg      Passed to the callback.
+ *
+ * @return true if the callback is registered, false if callback is NULL or all the slots are taken.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, bool             , _register_heap_added_callback, ( dmheap_heap_added_callback_t callback, void* arg ) );
+
+/**
+ * @brief Withdraw a callback registered with dmheap_register_heap_added_callback().
+ *
+ * @param callback The callback.
+ * @param arg      The argument it was registered with.
+ */
+DMOD_BUILTIN_API( dmheap, 1.0, void             , _unregister_heap_added_callback, ( dmheap_heap_added_callback_t callback, void* arg ) );
 /**
  * @brief Remove a heap from the default heap list, if present.
  *
